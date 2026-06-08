@@ -9,19 +9,22 @@ module instruction_memory #(
 
 logic [DATA_WIDTH-1:0] mem [0:(2**ADDR_WIDTH-1)];
 
+// Program path comes from +PROGRAM=<path> plusarg so the harness can run
+// many .mem files against the same compiled image without renaming files.
 initial begin
-    $readmemh("src/machine_code.mem", mem); // initialize ROM with data
-    // $readmemh("find_maximum_in_array_machine_code.mem", mem);
-
+    string program_path;
+    if (!$value$plusargs("PROGRAM=%s", program_path))
+        program_path = "src/machine_code.mem"; // fallback for ad-hoc runs
+    $readmemh(program_path, mem);
 end
 
 always_comb begin
     if (imem_req) begin
         imem_data = {
-            mem[imem_addr],
-            mem[imem_addr+1],
+            mem[imem_addr+3],
             mem[imem_addr+2],
-            mem[imem_addr+3]
+            mem[imem_addr+1],
+            mem[imem_addr]
         };
     end else begin
         imem_data = 32'd0;
