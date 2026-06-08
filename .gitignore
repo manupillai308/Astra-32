@@ -1,0 +1,9 @@
+*.pdf
+*.tgz
+*.dat
+*.DS_Store
+*.bkp
+*.run
+work/
+CLAUDE.md
+transcript

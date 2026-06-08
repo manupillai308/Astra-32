@@ -1,0 +1,16 @@
+{
+  "name": "systemverilog-dev",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "runArgs": [
+    "--mac-address=5a:41:e0:5b:ba:b7"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "mshr-h.VerilogHDL"
+      ]
+    }
+  }
+}
