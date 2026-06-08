@@ -10,3 +10,4 @@ transcript
 *.elf
 *.bin
 *.o
+*.log
