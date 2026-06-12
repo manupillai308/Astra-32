@@ -101,7 +101,7 @@ always_comb begin
              ctrl_i.wb_src,
              ctrl_i.load_zero_extend}
              =
-            {1'b1, BYTE, WORD, WB_SRC_MEM, 1'b0};
+            {1'b1, BYTE, WB_SRC_MEM, 1'b0};
 
         I_LH  :
             {ctrl_i.mem_valid,
