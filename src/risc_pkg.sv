@@ -157,5 +157,74 @@ typedef struct packed {
 } control_t;
 
 
+// --------------------------------------------------------
+// Pipeline Register Structs
+//   Each stage's outputs are latched into the next pipeline
+//   register on posedge. `valid` is 1 when the slot holds a
+//   real instruction, 0 for a bubble. Side effects (regfile
+//   write, dmem write, branch redirect) are gated by `valid`.
+// --------------------------------------------------------
+
+// ID/EX: decoded instruction + read register values + control
+typedef struct packed {
+    logic        valid;
+    logic [31:0] pc;                // for AUIPC / branch target
+    logic [31:0] rs1_data;
+    logic [31:0] rs2_data;
+    logic [31:0] immediate;
+    logic [4:0]  rd_addr;
+    // ALU controls
+    logic        op1_sel;
+    logic        op2_sel;
+    alu_op_t     alu_op;
+    // Branch / jump
+    logic        is_b_type;
+    logic [2:0]  funct3;
+    logic        pc_sel;            // unconditional jump (JAL/JALR)
+    // MEM controls
+    logic        dmem_req;
+    logic        dmem_wr_en;
+    mem_size_t   dmem_size;
+    logic        dmem_zero_extend;
+    // WB controls
+    logic        rf_wr_en;
+    wb_src_t     rf_wr_data_sel;
+} id_ex_t;
+
+// EX/MEM: ALU result + resolved branch + remaining MEM/WB controls
+typedef struct packed {
+    logic        valid;
+    logic [31:0] alu_res;
+    logic [31:0] rs2_data;          // for stores
+    logic [31:0] immediate;         // for LUI WB
+    logic [31:0] next_seq_pc;       // for JAL/JALR WB (= pc + 4)
+    logic [31:0] branch_target;     // {alu_res[31:1], 1'b0}
+    logic [4:0]  rd_addr;
+    // Resolved branch
+    logic        branch_taken;      // from branch_control
+    logic        pc_sel;            // unconditional jump
+    // MEM controls
+    logic        dmem_req;
+    logic        dmem_wr_en;
+    mem_size_t   dmem_size;
+    logic        dmem_zero_extend;
+    // WB controls
+    logic        rf_wr_en;
+    wb_src_t     rf_wr_data_sel;
+} ex_mem_t;
+
+// MEM/WB: writeback inputs. dmem_rd_data is taken straight off the
+// dmem output reg during the WB cycle (not stored here).
+typedef struct packed {
+    logic        valid;
+    logic [31:0] alu_res;
+    logic [31:0] immediate;
+    logic [31:0] next_seq_pc;
+    logic [4:0]  rd_addr;
+    logic        rf_wr_en;
+    wb_src_t     rf_wr_data_sel;
+} mem_wb_t;
+
+
 endpackage
 

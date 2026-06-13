@@ -2,9 +2,10 @@ module instruction_memory #(
     parameter ADDR_WIDTH = 7, // address bits
     parameter DATA_WIDTH = 8 // data width per memory cell
 )(
-    input logic imem_req, // read enable
-    input logic [31:0] imem_addr, // byte address (word-aligned)
-    output logic [31:0] imem_data // output instruction
+    input  logic        clk,
+    input  logic        imem_req,  // 1 = perform read this cycle
+    input  logic [31:0] imem_addr, // byte address (word-aligned)
+    output logic [31:0] imem_data  // valid one cycle after imem_req
 );
 
 logic [DATA_WIDTH-1:0] mem [0:(2**ADDR_WIDTH-1)];
@@ -18,16 +19,17 @@ initial begin
     $readmemh(program_path, mem);
 end
 
-always_comb begin
+// Synchronous read: 1-cycle latency. Required to infer BRAM on FPGA.
+// imem_data is only updated when imem_req is asserted, so the captured
+// instruction stays valid across stall cycles in the front-half of the pipe.
+always_ff @(posedge clk) begin
     if (imem_req) begin
-        imem_data = {
+        imem_data <= {
             mem[imem_addr+3],
             mem[imem_addr+2],
             mem[imem_addr+1],
             mem[imem_addr]
         };
-    end else begin
-        imem_data = 32'd0;
     end
 end
 

@@ -7,7 +7,9 @@ module test_bench();
   //   MAX_CYCLES: safety net so a buggy program can't loop forever.
   // ----------------------------------------------------------------
   parameter int HALT_ADDR  = 60;       // 0x3C
-  parameter int MAX_CYCLES = 1000;
+  // Bumped from 1000: pipelined-serialized mode is ~5 cycles per
+  // instruction, so bubble_sort (~200 insts) now needs ~1000 just to halt.
+  parameter int MAX_CYCLES = 5000;
 
   logic   clk;
   logic   reset_n;

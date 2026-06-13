@@ -11,13 +11,13 @@ state before moving on.
 ## 1. RISC-V CPU — pipelining (FPGA-targeted)
 
 ### 1.1 Foundations before touching the pipeline
-- [ ] **Regression harness**
+- [x] **Regression harness**
   - Script that compiles `src/*.sv`, runs each `.mem` program through
     `test_bench.sv`, dumps final register file + data memory.
   - Golden reference: hand-computed or captured-once-and-frozen outputs for
     `find_maximum_in_array`, `fibonacci_sequence`, `bubble_sort`.
   - Pass/fail diff on every run; must stay green through every pipeline change.
-- [ ] **Early synthesis check**
+- [x] **Early synthesis check**
   - Add `make synth` (yosys) that runs over `src/*.sv` and reports cell counts +
     any inferred latches. Catch FPGA-unfriendly constructs early.
 

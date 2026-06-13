@@ -36,19 +36,19 @@ always_ff @ (posedge clk) begin
   end
 end
 
-// read logic - load
-always_comb begin
+// read logic - load (synchronous; matches BRAM read-port semantics)
+// Output reg holds last loaded value across cycles where no read is issued,
+// so MEM-stage data is still on dmem_rd_data when WB consumes it next cycle.
+always_ff @(posedge clk) begin
   if (dmem_req && !dmem_wr_en) begin
     case (dmem_data_size)
-      BYTE: dmem_rd_data = dmem_zero_extend ? {{24{1'b0}}, mem[dmem_addr]} : {{24{mem[dmem_addr][7]}}, mem[dmem_addr]};
-      HALF_WORD: dmem_rd_data = dmem_zero_extend ?
+      BYTE: dmem_rd_data <= dmem_zero_extend ? {{24{1'b0}}, mem[dmem_addr]} : {{24{mem[dmem_addr][7]}}, mem[dmem_addr]};
+      HALF_WORD: dmem_rd_data <= dmem_zero_extend ?
                   {{16{1'b0}}, mem[dmem_addr+1], mem[dmem_addr]} :
                   {{16{mem[dmem_addr+1][7]}}, mem[dmem_addr+1], mem[dmem_addr]};
-      WORD: dmem_rd_data = {mem[dmem_addr+3], mem[dmem_addr+2], mem[dmem_addr+1], mem[dmem_addr]};
+      WORD: dmem_rd_data <= {mem[dmem_addr+3], mem[dmem_addr+2], mem[dmem_addr+1], mem[dmem_addr]};
     endcase
-  end else begin
-    dmem_rd_data = 32'd0;
   end
-  end
+end
 
 endmodule
