@@ -169,6 +169,8 @@ typedef struct packed {
 typedef struct packed {
     logic        valid;
     logic [31:0] pc;                // for AUIPC / branch target
+    logic [4:0]  rs1_addr;
+    logic [4:0]  rs2_addr;
     logic [31:0] rs1_data;
     logic [31:0] rs2_data;
     logic [31:0] immediate;

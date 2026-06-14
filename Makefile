@@ -38,7 +38,7 @@ all: test
 .PHONY: build
 build:
 	@vlib work 2>/dev/null || true
-	@vlog -sv $(SRC) > /dev/null
+	@vlog -sv src/risc_pkg.sv $(SRC)
 
 # ---- Assemble all .s -> .mem -------------------------------------
 # Per-test rules generated via eval so dependency tracking works.

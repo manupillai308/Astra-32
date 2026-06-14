@@ -30,6 +30,7 @@ module top #(
 // =====================================================
 logic [31:0] pc;
 logic        fetch_enable;
+logic        load_use_stall;
 logic        branch_redirect;
 logic [31:0] redirect_target;
 
@@ -82,6 +83,15 @@ logic [31:0] ex_next_seq_pc;
 logic [31:0] mem_dmem_rd_data;  // sync dmem output, lives one cycle past MEM
 logic [31:0] wb_data;
 
+logic forward_a_from_ex_mem;
+logic forward_b_from_ex_mem;
+
+logic forward_a_from_mem_wb;
+logic forward_b_from_mem_wb;
+
+
+logic [31:0] rs1_data_resolved;
+logic [31:0] rs2_data_resolved;
 // --------------------------------------------------------
 // Fetch gate
 //   Empty front-half => safe to fetch. mem_wb.valid is NOT
@@ -89,7 +99,7 @@ logic [31:0] wb_data;
 //   and the regfile write at end of WB lands BEFORE the
 //   next instruction's ID-stage regfile read.
 // --------------------------------------------------------
-assign fetch_enable = !(if_id_valid | id_ex.valid | ex_mem.valid);
+assign fetch_enable = !load_use_stall;
 
 // --------------------------------------------------------
 // Branch / jump redirect
@@ -124,8 +134,10 @@ always_ff @(posedge clk or negedge reset_n) begin
     if_id_pc    <= RESET_PC;
   end else if (branch_redirect) begin
     // Defensive: squash any speculative fetch behind the branch.
-    // (No speculation actually happens in the serialized model.)
+    // CONTROL HAZARD: IF/ID flush
     if_id_valid <= 1'b0;
+  end else if (load_use_stall) begin
+    // hold PC and IF/ID
   end else begin
     if_id_valid <= fetch_enable;
     if_id_pc    <= pc;
@@ -205,10 +217,12 @@ register_file u_register_file (
 // ID / EX  register
 // --------------------------------------------------------
 always_ff @(posedge clk or negedge reset_n) begin
-  if (!reset_n) id_ex <= '0;
+  if (!reset_n || load_use_stall) id_ex <= '0;
   else begin
-    id_ex.valid            <= if_id_valid && !branch_redirect;
+    id_ex.valid            <= if_id_valid && !branch_redirect; // CONTROL HAZARD: ID/EX flush
     id_ex.pc               <= if_id_pc;
+    id_ex.rs1_addr         <= id_rs1_addr;
+    id_ex.rs2_addr         <= id_rs2_addr;
     id_ex.rs1_data         <= id_rs1_data;
     id_ex.rs2_data         <= id_rs2_data;
     id_ex.immediate        <= id_immediate;
@@ -234,8 +248,27 @@ end
 //   for B-type/JAL is pc+imm and for JALR is rs1+imm (both
 //   already routed through the ALU by control_t settings).
 // --------------------------------------------------------
-assign ex_alu_a = id_ex.op1_sel ? id_ex.pc        : id_ex.rs1_data;
-assign ex_alu_b = id_ex.op2_sel ? id_ex.immediate : id_ex.rs2_data;
+// LOAD USE HAZARD: stall
+// N:   lw   x5, 0(x0)
+// N+1: addi x6, x5, 3
+assign load_use_stall = id_ex.valid && id_ex.dmem_req && !id_ex.dmem_wr_en // id_ex is a load
+                        && (id_ex.rd_addr == id_rs1_addr || id_ex.rd_addr == id_rs2_addr) 
+                        && (id_ex.rd_addr != 0);
+// DATA HAZARD (RAW): forwarding
+// N:   addi x5, x0, 5
+// N+1: addi x6, x5, 3      // needs x5
+assign forward_a_from_ex_mem = ex_mem.valid && ex_mem.rf_wr_en && (ex_mem.rd_addr != 0) && (ex_mem.rd_addr == id_ex.rs1_addr);
+assign forward_b_from_ex_mem = ex_mem.valid && ex_mem.rf_wr_en && (ex_mem.rd_addr != 0) && (ex_mem.rd_addr == id_ex.rs2_addr);
+
+assign forward_a_from_mem_wb = mem_wb.valid && mem_wb.rf_wr_en && (mem_wb.rd_addr != 0) && (mem_wb.rd_addr == id_ex.rs1_addr) && !forward_a_from_ex_mem;
+
+assign forward_b_from_mem_wb = mem_wb.valid && mem_wb.rf_wr_en && (mem_wb.rd_addr != 0) && (mem_wb.rd_addr == id_ex.rs2_addr) && !forward_b_from_ex_mem;
+
+assign rs1_data_resolved = forward_a_from_ex_mem ? ex_mem.alu_res : forward_a_from_mem_wb ? wb_data : id_ex.rs1_data;
+assign rs2_data_resolved = forward_b_from_ex_mem ? ex_mem.alu_res : forward_b_from_mem_wb ? wb_data : id_ex.rs2_data;
+
+assign ex_alu_a = id_ex.op1_sel ? id_ex.pc        : rs1_data_resolved;
+assign ex_alu_b = id_ex.op2_sel ? id_ex.immediate : rs2_data_resolved;
 
 alu u_alu (
     .alu_a   (ex_alu_a),
@@ -246,8 +279,8 @@ alu u_alu (
 );
 
 branch_control u_branch_control (
-    .opr_a        (id_ex.rs1_data),
-    .opr_b        (id_ex.rs2_data),
+    .opr_a        (rs1_data_resolved),
+    .opr_b        (rs2_data_resolved),
     .is_b_type    (id_ex.is_b_type),
     .funct3       (id_ex.funct3),
     .branch_taken (ex_branch_taken)
@@ -262,9 +295,9 @@ assign ex_next_seq_pc   = id_ex.pc + 32'd4;
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) ex_mem <= '0;
   else begin
-    ex_mem.valid            <= id_ex.valid;
+    ex_mem.valid            <= id_ex.valid && !branch_redirect;
     ex_mem.alu_res          <= ex_alu_res;
-    ex_mem.rs2_data         <= id_ex.rs2_data;
+    ex_mem.rs2_data         <= rs2_data_resolved;
     ex_mem.immediate        <= id_ex.immediate;
     ex_mem.next_seq_pc      <= ex_next_seq_pc;
     ex_mem.branch_target    <= ex_branch_target;
