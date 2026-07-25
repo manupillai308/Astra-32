@@ -10,17 +10,23 @@ module test_bench();
   // Bumped from 1000: pipelined-serialized mode is ~5 cycles per
   // instruction, so bubble_sort (~200 insts) now needs ~1000 just to halt.
   parameter int MAX_CYCLES = 5000;
+  localparam int LED_WIDTH = 3;
 
   logic   clk;
   logic   reset_n;
   integer cycle_count = 0;
+  logic [LED_WIDTH-1:0] mmio_led;
 
   // 10-time-unit clock period
   always #5 clk = ~clk;
 
-  top #(.RESET_PC(32'h0)) dut (
+  top #(
+    .RESET_PC(32'h0),
+    .LED_WIDTH(LED_WIDTH)
+  ) dut (
     .clk(clk),
-    .reset_n(reset_n)
+    .reset_n(reset_n),
+    .mmio_led(mmio_led)
   );
 
   // ----------------------------------------------------------------
@@ -33,10 +39,10 @@ module test_bench();
     cycle_count <= cycle_count + 1;
 
     if (reset_n &&
-        dut.u_data_memory.mem[HALT_ADDR] !== 8'h00 &&
-        dut.u_data_memory.mem[HALT_ADDR] !== 8'hxx) begin
+        dut.u_bus.u_data_memory.mem[HALT_ADDR] !== 8'h00 &&
+        dut.u_bus.u_data_memory.mem[HALT_ADDR] !== 8'hxx) begin
       $display("[PASS] halt detected at cycle %0d (dmem[0x%0h]=0x%0h)",
-               cycle_count, HALT_ADDR, dut.u_data_memory.mem[HALT_ADDR]);
+               cycle_count, HALT_ADDR, dut.u_bus.u_data_memory.mem[HALT_ADDR]);
       dump_state();
       $finish;
     end
@@ -59,8 +65,8 @@ module test_bench();
   task dump_state;
     string outdir;
     if (!$value$plusargs("OUTDIR=%s", outdir)) outdir = ".";
-    $writememh({outdir, "/actual_regs.hex"}, dut.u_register_file.regs);
-    $writememh({outdir, "/actual_dmem.hex"}, dut.u_data_memory.mem);
+    $writememh({outdir, "/actual_regs.hex"}, dut.u_cpu.u_register_file.regs);
+    $writememh({outdir, "/actual_dmem.hex"}, dut.u_bus.u_data_memory.mem);
   endtask
 
   // ----------------------------------------------------------------

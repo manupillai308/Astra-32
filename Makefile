@@ -83,8 +83,8 @@ test: build asm
 	  $(VSIM) +PROGRAM=tests/$$t/$$t.mem \
 	          +OUTDIR=tests/$$t \
 	          work.test_bench > tests/$$t/sim.log 2>&1; \
-	  if diff -q tests/$$t/actual_regs.hex tests/$$t/expected_regs.hex >/dev/null 2>&1 && \
-	     diff -q tests/$$t/actual_dmem.hex tests/$$t/expected_dmem.hex >/dev/null 2>&1; then \
+	  if diff -I '^//' -q tests/$$t/actual_regs.hex tests/$$t/expected_regs.hex >/dev/null 2>&1 && \
+	     diff -I '^//' -q tests/$$t/actual_dmem.hex tests/$$t/expected_dmem.hex >/dev/null 2>&1; then \
 	    echo "[PASS] $$t"; pass=$$((pass+1)); \
 	  else \
 	    echo "[FAIL] $$t  (see tests/$$t/sim.log; diff actual vs expected)"; \

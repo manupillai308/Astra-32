@@ -16,6 +16,7 @@ initial begin
     string program_path;
     if (!$value$plusargs("PROGRAM=%s", program_path))
         program_path = "src/machine_code.mem"; // fallback for ad-hoc runs
+        // program_path = "find_max.mem";
     $readmemh(program_path, mem);
 end
 
