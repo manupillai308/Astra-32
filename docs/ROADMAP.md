@@ -1,7 +1,8 @@
 # Project Roadmap
 
-End goal: a synthesizable RISC-V CPU on FPGA, paired with an LLVM C toolchain,
-a small OS, and an ML accelerator usable from ONNX / TFLite.
+End goal: a synthesizable RISC-V SoC on FPGA that can first run bare-metal
+programs, then a small OS, then a Linux-capable RISC-V system, paired with an
+LLVM C toolchain and an ML accelerator usable from ONNX / TFLite.
 
 Tackle top-to-bottom. Each step should leave the design in a working, testable
 state before moving on.
@@ -9,6 +10,10 @@ state before moving on.
 ---
 
 ## 1. RISC-V CPU — pipelining (FPGA-targeted)
+
+Current ISA scope: **RV32I**. The assembler flow uses
+`-march=rv32i -mabi=ilp32`, and the RTL currently decodes RV32I integer
+compute, load/store, branch, jump, `LUI`, and `AUIPC` instructions.
 
 ### 1.1 Foundations before touching the pipeline
 - [x] **Regression harness**
@@ -22,43 +27,100 @@ state before moving on.
     any inferred latches. Catch FPGA-unfriendly constructs early.
 
 ### 1.2 Memory model matching real FPGA BRAM
-- [ ] Convert `instruction_memory.sv` to **synchronous read** (1-cycle latency,
+- [x] Convert `instruction_memory.sv` to **synchronous read** (1-cycle latency,
       registered output) — that's how FPGA block RAM actually behaves.
-- [ ] Convert `data_memory.sv` similarly (synchronous read, synchronous write).
-- [ ] Adjust `fetch.sv` / `top.sv` so the existing single-cycle design still
+- [x] Convert `data_memory.sv` similarly (synchronous read, synchronous write).
+- [x] Adjust `fetch.sv` / `top.sv` so the existing single-cycle design still
       passes the regression suite with the new memory timing.
 
 ### 1.3 5-stage pipeline split
-- [ ] Insert pipeline registers: `IF/ID`, `ID/EX`, `EX/MEM`, `MEM/WB`.
-- [ ] No hazard handling yet. Verify on **no-hazard programs** (NOPs between
+- [x] Insert pipeline registers: `IF/ID`, `ID/EX`, `EX/MEM`, `MEM/WB`.
+- [x] No hazard handling yet. Verify on **no-hazard programs** (NOPs between
       dependent instructions) — proves the bones are right.
-- [ ] Update schematic (`docs/schematic.drawio`) with the pipeline register
+- [x] Update schematic (`docs/schematic.drawio`) with the pipeline register
       stages.
 
 ### 1.4 Hazards
-- [ ] **Data hazards — forwarding**: EX→EX and MEM→EX bypass paths for RAW.
-- [ ] **Load-use hazard — stall**: 1-cycle bubble when load is followed by a
+- [x] **Data hazards — forwarding**: EX→EX and MEM→EX bypass paths for RAW.
+- [x] **Load-use hazard — stall**: 1-cycle bubble when load is followed by a
       dependent op.
-- [ ] **Control hazards — branch flush**: assume-not-taken, kill IF/ID and ID/EX
+- [x] **Control hazards — branch flush**: assume-not-taken, kill IF/ID and ID/EX
       on misprediction. (Optional later: static BTFN or simple BTB.)
-- [ ] Re-run full regression suite, all programs pass.
+- [x] Re-run full regression suite, all programs pass.
 
 ### 1.5 FPGA bring-up
-- [ ] Pick target board / family (TBD — e.g., Xilinx Artix-7, Lattice ECP5).
+- [x] Pick target board / family (TBD — e.g., Xilinx Artix-7, Lattice ECP5).
 - [ ] Replace `$readmemh` ROM with synthesizable BRAM init.
-- [ ] Add a minimal top-level wrapper with clock, reset, and a debug output
+- [x] Add a minimal top-level wrapper with clock, reset, and a debug output
       (e.g., LEDs from a memory-mapped register).
 - [ ] Constraints file (clock, pins), report `Fmax` and slice/LUT usage.
 
 ---
 
-## 2. LLVM C backend
+## 2. Linux-Capable SoC Bring-Up Path
+
+Linux is not just "more instructions"; it needs a platform. Build this in
+small, testable SoC steps after basic FPGA bring-up.
+
+### 2.1 Clean SoC structure
+- [x] Split the CPU core from the SoC wrapper: `cpu` is the core, `top` is the
+      SoC, and `fpga_top` is the board wrapper.
+- [x] Add a simple bus/address decoder for RAM vs. MMIO.
+- [x] Add first MMIO peripheral: software-controlled LED register.
+- [ ] Define and document the physical memory map in one place:
+      RAM, boot ROM, UART, timer, interrupt controller, and future devices.
+- [ ] Add unmapped-address behavior: return zero for reads for now; later raise
+      a load/store access fault when traps exist.
+
+### 2.2 Minimum useful FPGA SoC
+- [ ] Replace tiny internal RAM with a larger RAM target appropriate for the
+      board: BRAM first, then external DDR if available.
+- [ ] Add a boot ROM or fixed reset image that can jump into RAM.
+- [ ] Add UART MMIO for console output/input. This becomes the primary hardware
+      debug path; LEDs are only bring-up visibility.
+- [ ] Add a machine timer (`mtime` / `mtimecmp`) and expose it through MMIO.
+- [ ] Add a basic interrupt path from peripherals into the CPU.
+
+### 2.3 ISA and privilege work for OS/Linux
+- [ ] Add `Zicsr`: CSR read/write instructions.
+- [ ] Add `Zifencei`: instruction-fetch fence support.
+- [ ] Add machine-mode CSRs and traps: `mstatus`, `mtvec`, `mepc`, `mcause`,
+      `mtval`, `mie`, `mip`, `mscratch`.
+- [ ] Add `ecall`, `ebreak`, `mret`, and precise exception entry/return.
+- [ ] Add supervisor mode and supervisor CSRs: `sstatus`, `stvec`, `sepc`,
+      `scause`, `stval`, `satp`, `sie`, `sip`, plus delegation CSRs.
+- [ ] Add virtual memory with Sv32 page-table translation and TLB behavior.
+- [ ] Add the `A` extension or an equivalent atomic path. Linux needs atomic
+      operations for locks and kernel synchronization.
+- [ ] Add the `M` extension (`mul`, `div`, remainder). Linux can theoretically
+      trap/emulate missing integer multiply/divide, but implementing `M` is the
+      practical target.
+
+### 2.4 FPU decision
+- [ ] Do **not** treat FPU as the first Linux blocker. A soft-float Linux/userland
+      target can run without hardware `F`/`D`.
+- [ ] Decide later whether to implement `F` and `D` for a standard hard-float
+      userspace ABI and better application performance.
+- [ ] If `F`/`D` are added, also implement floating-point CSRs, context-switch
+      state, exception flags, and tests.
+
+### 2.5 Linux bring-up milestones
+- [ ] Run progressively richer bare-metal firmware from the SoC memory map.
+- [ ] Run a tiny machine-mode monitor or SBI-like firmware layer.
+- [ ] Boot a minimal supervisor-mode payload.
+- [ ] Boot a Linux kernel with an initramfs over UART console.
+- [ ] Add a device tree that describes RAM, CPU ISA string, UART, timer,
+      interrupt controller, and memory map accurately.
+
+---
+
+## 3. LLVM C backend
 
 - [ ] Stand up the off-the-shelf `riscv32-unknown-elf-gcc` / `clang` flow first
       as a reference — get a known-good binary running on the CPU.
 - [ ] Define our linker script + memory layout (text in IMEM, data/stack in DMEM).
 - [ ] Decide scope of custom LLVM backend: pure RV32I target, or RV32I + custom
-      accelerator instructions (ties into step 4.1).
+      accelerator instructions (ties into step 5.1).
 - [ ] Build LLVM out-of-tree backend skeleton (target description, register info,
       instruction info, calling convention).
 - [ ] End-to-end: a hand-written `.c` file → custom LLVM → `.mem` → runs on CPU,
@@ -66,7 +128,7 @@ state before moving on.
 
 ---
 
-## 3. Operating System
+## 4. Operating System
 
 - [ ] Add CSRs + privilege levels (M-mode at minimum, M+U for userspace).
 - [ ] Trap/interrupt support: `mtvec`, `mepc`, `mcause`, `mtval`, `mstatus`.
@@ -79,7 +141,7 @@ state before moving on.
 
 ---
 
-## 4. RISC-V hardware accelerator
+## 5. RISC-V hardware accelerator
 
 - [ ] Pick workload class (small NN inference: int8 matmul, conv kernel, etc.).
 - [ ] Define custom instructions or memory-mapped accelerator interface.
@@ -89,14 +151,14 @@ state before moving on.
 - [ ] Wire into pipeline (writeback path + stall logic if multi-cycle).
 - [ ] Standalone tests, then full-system tests via memory-mapped registers.
 
-### 4.1 LLVM backend for accelerator instructions
+### 5.1 LLVM backend for accelerator instructions
 - [ ] Add intrinsics / builtins for the accelerator ops.
 - [ ] Pattern-match C code (or explicit calls) to emit accelerator instructions.
 - [ ] Performance benchmark: same kernel, scalar vs. accelerated.
 
 ---
 
-## 5. ONNX EP or TFLite Delegate
+## 6. ONNX EP or TFLite Delegate
 
 - [ ] Decide ONNX Runtime Execution Provider vs. TFLite Delegate.
 - [ ] Quantization story (likely int8) — must match accelerator data types.
@@ -110,8 +172,12 @@ state before moving on.
 ## Notes on ordering / parallelism
 
 - Steps 1.1 and 1.2 unblock everything else and should be done first.
-- Step 2 (LLVM) can start in parallel with step 1.3 once the regression
+- Step 2 starts after FPGA bring-up because it depends on a stable SoC boundary
+  and a physical memory map.
+- Step 3 (LLVM) can start in parallel with step 1.3 once the regression
   harness exists, since the LLVM work is mostly off-FPGA.
-- Step 3 (OS) needs CSRs in the CPU; do not start until step 1 is stable.
-- Steps 4 and 5 are the long-tail and depend on a working pipelined CPU +
-  toolchain.
+- Step 4 (small OS) needs CSRs in the CPU; do not start until step 1 is stable.
+- Linux bring-up needs Step 2.3 substantially complete: privilege, traps,
+  timer/interrupts, atomics, and Sv32 MMU.
+- Steps 5 and 6 are the long-tail and depend on a working pipelined CPU,
+  SoC memory map, and toolchain.
