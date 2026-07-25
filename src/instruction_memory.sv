@@ -10,14 +10,17 @@ module instruction_memory #(
 
 logic [DATA_WIDTH-1:0] mem [0:(2**ADDR_WIDTH-1)];
 
-// Program path comes from +PROGRAM=<path> plusarg so the harness can run
-// many .mem files against the same compiled image without renaming files.
+// Simulation can override the program with +PROGRAM=<path>. Synthesis uses a
+// fixed file so Vivado can infer initialized FPGA memory.
 initial begin
+`ifndef SYNTHESIS
     string program_path;
     if (!$value$plusargs("PROGRAM=%s", program_path))
-        program_path = "src/machine_code.mem"; // fallback for ad-hoc runs
-        // program_path = "find_max.mem";
+        program_path = "machine_code.mem";
     $readmemh(program_path, mem);
+`else
+    $readmemh("machine_code.mem", mem);
+`endif
 end
 
 // Synchronous read: 1-cycle latency. Required to infer BRAM on FPGA.

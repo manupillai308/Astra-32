@@ -64,9 +64,18 @@ module test_bench();
   // ----------------------------------------------------------------
   task dump_state;
     string outdir;
+    integer led_file;
     if (!$value$plusargs("OUTDIR=%s", outdir)) outdir = ".";
     $writememh({outdir, "/actual_regs.hex"}, dut.u_cpu.u_register_file.regs);
     $writememh({outdir, "/actual_dmem.hex"}, dut.u_bus.u_data_memory.mem);
+
+    led_file = $fopen({outdir, "/actual_led.hex"}, "w");
+    if (led_file) begin
+      $fdisplay(led_file, "%0h", mmio_led);
+      $fclose(led_file);
+    end else begin
+      $display("[WARN] could not open %s", {outdir, "/actual_led.hex"});
+    end
   endtask
 
   // ----------------------------------------------------------------
