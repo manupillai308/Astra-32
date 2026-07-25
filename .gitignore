@@ -11,3 +11,4 @@ transcript
 *.bin
 *.o
 *.log
+xilinx_project/*
