@@ -69,8 +69,10 @@ run: build
 # ---- Capture: run then freeze actual_* as expected_* -------------
 .PHONY: capture
 capture: run
-	@cp tests/$(TEST)/actual_regs.hex tests/$(TEST)/expected_regs.hex
-	@cp tests/$(TEST)/actual_dmem.hex tests/$(TEST)/expected_dmem.hex
+	@for actual in tests/$(TEST)/actual_*.hex; do \
+	  expected=$${actual/actual_/expected_}; \
+	  cp "$$actual" "$$expected"; \
+	done
 	@echo "[CAPTURED] $(TEST)"
 
 # ---- Full regression ---------------------------------------------
@@ -83,8 +85,18 @@ test: build asm
 	  $(VSIM) +PROGRAM=tests/$$t/$$t.mem \
 	          +OUTDIR=tests/$$t \
 	          work.test_bench > tests/$$t/sim.log 2>&1; \
-	  if diff -I '^//' -q tests/$$t/actual_regs.hex tests/$$t/expected_regs.hex >/dev/null 2>&1 && \
-	     diff -I '^//' -q tests/$$t/actual_dmem.hex tests/$$t/expected_dmem.hex >/dev/null 2>&1; then \
+	  ok=1; \
+	  for actual in tests/$$t/actual_*.hex; do \
+	    expected=$${actual/actual_/expected_}; \
+	    if [ ! -f "$$expected" ]; then \
+	      echo "[MISSING] $$expected"; \
+	      ok=0; \
+	    elif ! diff -I '^//' -q "$$actual" "$$expected" >/dev/null 2>&1; then \
+	      echo "[DIFF] $$actual $$expected"; \
+	      ok=0; \
+	    fi; \
+	  done; \
+	  if [ $$ok -eq 1 ]; then \
 	    echo "[PASS] $$t"; pass=$$((pass+1)); \
 	  else \
 	    echo "[FAIL] $$t  (see tests/$$t/sim.log; diff actual vs expected)"; \
