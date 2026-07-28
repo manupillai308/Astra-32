@@ -7,9 +7,8 @@ module test_bench();
   //   MAX_CYCLES: safety net so a buggy program can't loop forever.
   // ----------------------------------------------------------------
   parameter int HALT_ADDR  = 60;       // 0x3C
-  // Bumped from 1000: pipelined-serialized mode is ~5 cycles per
-  // instruction, so bubble_sort (~200 insts) now needs ~1000 just to halt.
-  parameter int MAX_CYCLES = 5000;
+  // UART tests need ~1040 cycles per transmitted byte at 12 MHz / 115200 baud.
+  parameter int MAX_CYCLES = 10000;
   localparam int LED_WIDTH = 3;
   localparam int UART_CLKS_PER_BIT = 12_000_000 / 115_200;
   localparam int UART_MAX_CAPTURED_BYTES = 256;
