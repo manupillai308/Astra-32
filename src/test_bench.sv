@@ -10,6 +10,8 @@ module test_bench();
   // UART tests need ~1040 cycles per transmitted byte at 12 MHz / 115200 baud.
   parameter int MAX_CYCLES = 10000;
   localparam int LED_WIDTH = 3;
+  localparam int RAM_ADDR_WIDTH = 12;
+  localparam int DMEM_BYTES = 2**RAM_ADDR_WIDTH;
   localparam int UART_CLKS_PER_BIT = 12_000_000 / 115_200;
   localparam int UART_MAX_CAPTURED_BYTES = 256;
 
@@ -38,7 +40,8 @@ module test_bench();
 
   top #(
     .RESET_PC(32'h0),
-    .LED_WIDTH(LED_WIDTH)
+    .LED_WIDTH(LED_WIDTH),
+    .RAM_ADDR_WIDTH(RAM_ADDR_WIDTH)
   ) dut (
     .clk(clk),
     .reset_n(reset_n),
@@ -46,6 +49,15 @@ module test_bench();
     .uart_rx(uart_rx),
     .uart_tx(uart_tx)
   );
+
+  function automatic logic [7:0] dmem_byte(input int unsigned byte_addr);
+    unique case (byte_addr[1:0])
+      2'b00: dmem_byte = dut.u_bus.u_data_memory.mem[byte_addr[31:2]][7:0];
+      2'b01: dmem_byte = dut.u_bus.u_data_memory.mem[byte_addr[31:2]][15:8];
+      2'b10: dmem_byte = dut.u_bus.u_data_memory.mem[byte_addr[31:2]][23:16];
+      default: dmem_byte = dut.u_bus.u_data_memory.mem[byte_addr[31:2]][31:24];
+    endcase
+  endfunction
 
   // ----------------------------------------------------------------
   // Halt detection + timeout
@@ -57,10 +69,10 @@ module test_bench();
     cycle_count <= cycle_count + 1;
 
     if (reset_n &&
-        dut.u_bus.u_data_memory.mem[HALT_ADDR] !== 8'h00 &&
-        dut.u_bus.u_data_memory.mem[HALT_ADDR] !== 8'hxx) begin
+        dmem_byte(HALT_ADDR) !== 8'h00 &&
+        dmem_byte(HALT_ADDR) !== 8'hxx) begin
       $display("[PASS] halt detected at cycle %0d (dmem[0x%0h]=0x%0h)",
-               cycle_count, HALT_ADDR, dut.u_bus.u_data_memory.mem[HALT_ADDR]);
+               cycle_count, HALT_ADDR, dmem_byte(HALT_ADDR));
       dump_state();
       $finish;
     end
@@ -139,12 +151,22 @@ module test_bench();
   // ----------------------------------------------------------------
   task dump_state;
     string outdir;
+    integer dmem_file;
     integer led_file;
     integer uart_file;
     integer i;
     if (!$value$plusargs("OUTDIR=%s", outdir)) outdir = ".";
     $writememh({outdir, "/actual_regs.hex"}, dut.u_cpu.u_register_file.regs);
-    $writememh({outdir, "/actual_dmem.hex"}, dut.u_bus.u_data_memory.mem);
+
+    dmem_file = $fopen({outdir, "/actual_dmem.hex"}, "w");
+    if (dmem_file) begin
+      for (i = 0; i < DMEM_BYTES; i = i + 1) begin
+        $fdisplay(dmem_file, "%02h", dmem_byte(i));
+      end
+      $fclose(dmem_file);
+    end else begin
+      $display("[WARN] could not open %s", {outdir, "/actual_dmem.hex"});
+    end
 
     led_file = $fopen({outdir, "/actual_led.hex"}, "w");
     if (led_file) begin

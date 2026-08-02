@@ -20,7 +20,7 @@ end
 
 top #(
   .RESET_PC       (32'h0000),
-  .RAM_ADDR_WIDTH (6),
+  .RAM_ADDR_WIDTH (12),
   .LED_WIDTH      (3),
   .LED_BASE_ADDR  (32'h1000_0000),
   .UART_BASE_ADDR (32'h1000_0010),

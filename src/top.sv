@@ -2,7 +2,7 @@ import risc_pkg::*;
 
 module top #(
   parameter RESET_PC = 32'h0000,
-  parameter RAM_ADDR_WIDTH = 6,
+  parameter RAM_ADDR_WIDTH = 10,
   parameter LED_WIDTH = 3,
   parameter LED_BASE_ADDR = 32'h1000_0000,
   parameter UART_BASE_ADDR = 32'h1000_0010,
