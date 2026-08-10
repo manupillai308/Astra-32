@@ -43,6 +43,7 @@ logic        load_use_stall;
 logic        memory_stall;
 logic        pipeline_stall;
 logic        branch_redirect;
+logic        redirect_fire;
 logic [31:0] redirect_target;
 
 logic        imem_req;
@@ -118,6 +119,7 @@ assign fetch_enable = !pipeline_stall;
 //   Decided in EX, observed via EX/MEM register.
 // --------------------------------------------------------
 assign branch_redirect = ex_mem.valid && (ex_mem.branch_taken || ex_mem.pc_sel);
+assign redirect_fire = branch_redirect && !memory_stall;
 assign redirect_target = ex_mem.branch_target;
 
 // --------------------------------------------------------
@@ -125,18 +127,9 @@ assign redirect_target = ex_mem.branch_target;
 //   Priority: redirect (overrides any prediction) > fetch (+4).
 //   Otherwise hold.
 // --------------------------------------------------------
-`ifndef SYNTHESIS
-always_ff @(posedge clk) begin
-  if (reset_n) begin
-    assert (!(memory_stall && branch_redirect))
-      else $fatal("branch_redirect during memory_stall");
-  end
-end
-`endif
-
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n)               pc <= RESET_PC;
-  else if (branch_redirect)   pc <= redirect_target;
+  else if (redirect_fire)     pc <= redirect_target;
   else if (fetch_enable)      pc <= pc + 32'd4;
 end
 
@@ -153,7 +146,7 @@ always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) begin
     if_id_valid <= 1'b0;
     if_id_pc    <= RESET_PC;
-  end else if (branch_redirect) begin
+  end else if (redirect_fire) begin
     // Defensive: squash any speculative fetch behind the branch.
     // CONTROL HAZARD: IF/ID flush
     if_id_valid <= 1'b0;

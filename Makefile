@@ -6,6 +6,7 @@
 #   make asm                 assemble all tests/*/*.s -> .mem
 #   make run TEST=fibonacci  run one test, leaves actual_*.hex
 #   make capture TEST=...    run + freeze actual as expected (golden)
+#   make capture-all         run + freeze every test as expected
 #   make test                run every test, diff against golden,
 #                            print pass/fail summary
 #   make clean               remove build artefacts
@@ -79,6 +80,12 @@ capture: run
 	  cp "$$actual" "$$expected"; \
 	done
 	@echo "[CAPTURED] $(TEST)"
+
+.PHONY: capture-all
+capture-all:
+	@for t in $(TESTS); do \
+	  $(MAKE) -s capture TEST=$$t || exit $$?; \
+	done
 
 # ---- Full regression ---------------------------------------------
 # Runs every test, diffs against golden, prints pass/fail summary.

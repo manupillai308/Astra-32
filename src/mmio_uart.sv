@@ -10,6 +10,7 @@ module mmio_uart #(
     input logic [31:0] addr,
     input logic [31:0] wr_data,
     output logic [31:0] rd_data,
+    output logic busy,
 
     input logic uart_rx,
     output logic uart_tx
@@ -28,6 +29,9 @@ logic rx_sync_2;
 
 wire tx_ready = (tx_bits_remaining == 4'd0);
 wire tx_start = req && wr_en && tx_ready && (addr[3:0] == TXDATA_OFFSET);
+wire read_start = req && !wr_en;
+
+assign busy = read_start;
 
 assign uart_tx = tx_ready ? 1'b1 : tx_shift[0]; // idle and shift is combinational but value changes in sync
 

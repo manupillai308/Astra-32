@@ -34,6 +34,7 @@ logic ram_req;
 logic led_req;
 logic uart_req;
 logic ram_busy;
+logic uart_busy;
 logic selected_busy;
 logic accept_txn;
 
@@ -105,7 +106,7 @@ always_comb begin
   unique case (active_target)
     BUS_TARGET_RAM:  selected_busy = ram_busy;
     BUS_TARGET_LED:  selected_busy = 1'b0;
-    BUS_TARGET_UART: selected_busy = 1'b0;
+    BUS_TARGET_UART: selected_busy = uart_busy;
     default:         selected_busy = 1'b0;
   endcase
 end
@@ -212,6 +213,7 @@ mmio_uart #(
   .addr(bus_addr),
   .wr_data(bus_wr_data),
   .rd_data(uart_rd_data),
+  .busy(uart_busy),
   .uart_rx(uart_rx),
   .uart_tx(uart_tx)
 );
