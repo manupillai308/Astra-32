@@ -93,6 +93,8 @@ logic [31:0] ex_next_seq_pc;
 // MEM / WB
 // =====================================================
 logic [31:0] wb_data;
+logic        wb_commit;
+logic        mem_wb_committed;
 
 logic forward_a_from_ex_mem;
 logic forward_b_from_ex_mem;
@@ -215,13 +217,15 @@ control u_control (
 
 // Regfile: combinational read in ID, sync write from WB.
 // Write enable is gated by mem_wb.valid so bubbles don't write.
+assign wb_commit = mem_wb.valid && mem_wb.rf_wr_en && !mem_wb_committed;
+
 register_file u_register_file (
     .clk      (clk),
     .reset_n  (reset_n),
     .rs1_addr (id_rs1_addr),
     .rs2_addr (id_rs2_addr),
     .rd_addr  (mem_wb.rd_addr),
-    .rf_wr_en (mem_wb.valid && mem_wb.rf_wr_en),
+    .rf_wr_en (wb_commit),
     .wr_data  (wb_data),
     .rs1_data (id_rs1_data),
     .rs2_data (id_rs2_data)
@@ -351,9 +355,13 @@ assign dmem_zero_extend = ex_mem.dmem_zero_extend;
 //   dmem_rd_data is provided by the SoC memory system in the WB cycle.
 // --------------------------------------------------------
 always_ff @(posedge clk or negedge reset_n) begin
-  if (!reset_n) mem_wb <= '0;
+  if (!reset_n) begin
+    mem_wb <= '0;
+    mem_wb_committed <= 1'b0;
+  end
   else if (memory_stall) begin
-    // hold
+    // Hold forwarding data stable, but allow this WB slot to commit once.
+    if (wb_commit) mem_wb_committed <= 1'b1;
   end
   else begin
     mem_wb.valid          <= ex_mem.valid;
@@ -364,6 +372,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     mem_wb.rd_addr        <= ex_mem.rd_addr;
     mem_wb.rf_wr_en       <= ex_mem.rf_wr_en;
     mem_wb.rf_wr_data_sel <= ex_mem.rf_wr_data_sel;
+    mem_wb_committed      <= 1'b0;
   end
 end
 
