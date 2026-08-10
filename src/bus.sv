@@ -6,7 +6,8 @@ module bus #(
   parameter LED_BASE_ADDR = 32'h1000_0000,
   parameter UART_BASE_ADDR = 32'h1000_0010,
   parameter int CLK_HZ = 12_000_000,
-  parameter int UART_BAUD = 115_200
+  parameter int UART_BAUD = 115_200,
+  parameter int RAM_STALL_CYCLES = 2
 )(
   input  logic                 clk,
   input  logic                 reset_n,
@@ -173,7 +174,8 @@ always_comb begin
 end
 
 data_memory #(
-  .ADDR_WIDTH(RAM_ADDR_WIDTH)
+  .ADDR_WIDTH(RAM_ADDR_WIDTH),
+  .STALL_CYCLES(RAM_STALL_CYCLES)
 ) u_data_memory (
   .clk              (clk),
   .reset_n          (reset_n),

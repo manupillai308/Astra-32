@@ -5,7 +5,8 @@
 import risc_pkg::*;
 
 module data_memory #(
-  parameter ADDR_WIDTH = 6  // byte address bits: 2^6 = 64 bytes
+  parameter ADDR_WIDTH = 6,  // byte address bits: 2^6 = 64 bytes
+  parameter int STALL_CYCLES = 2
 )(
   input logic 				  clk,
   input logic                 reset_n,
@@ -24,7 +25,7 @@ module data_memory #(
 // RAM Declaration
 // --------------------------------------------------------
 localparam int WORD_ADDR_WIDTH = ADDR_WIDTH - 2;
-localparam logic [1:0] STALL_CYCLES = 2'd2;
+localparam int STALL_COUNTER_WIDTH = (STALL_CYCLES <= 1) ? 1 : $clog2(STALL_CYCLES + 1);
 
 (* ram_style = "block" *)
 logic [31:0] mem [0:(2**WORD_ADDR_WIDTH)-1];
@@ -40,7 +41,7 @@ logic ram_zero_extend;
 logic [31:0] ram_rd_data;
 
 logic busy_q;
-logic [1:0] stall_counter;
+logic [STALL_COUNTER_WIDTH-1:0] stall_counter;
 
 assign dmem_busy = busy_q || dmem_req;
 

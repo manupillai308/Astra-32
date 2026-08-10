@@ -7,7 +7,8 @@ module top #(
   parameter LED_BASE_ADDR = 32'h1000_0000,
   parameter UART_BASE_ADDR = 32'h1000_0010,
   parameter int CLK_HZ = 12_000_000,
-  parameter int UART_BAUD = 115_200
+  parameter int UART_BAUD = 115_200,
+  parameter int RAM_STALL_CYCLES = 2
 )(
   input  logic                 clk,
   input  logic                 reset_n,
@@ -46,7 +47,8 @@ bus #(
   .LED_BASE_ADDR  (LED_BASE_ADDR),
   .UART_BASE_ADDR (UART_BASE_ADDR),
   .CLK_HZ (CLK_HZ),
-  .UART_BAUD (UART_BAUD)
+  .UART_BAUD (UART_BAUD),
+  .RAM_STALL_CYCLES (RAM_STALL_CYCLES)
 ) u_bus (
   .clk                  (clk),
   .reset_n              (reset_n),

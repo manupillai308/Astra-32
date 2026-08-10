@@ -14,6 +14,7 @@ module test_bench();
   localparam int DMEM_BYTES = 2**RAM_ADDR_WIDTH;
   localparam int UART_CLKS_PER_BIT = 12_000_000 / 115_200;
   localparam int UART_MAX_CAPTURED_BYTES = 256;
+  parameter int RAM_STALL_CYCLES = 2;
 
   logic   clk;
   logic   reset_n;
@@ -41,7 +42,8 @@ module test_bench();
   top #(
     .RESET_PC(32'h0),
     .LED_WIDTH(LED_WIDTH),
-    .RAM_ADDR_WIDTH(RAM_ADDR_WIDTH)
+    .RAM_ADDR_WIDTH(RAM_ADDR_WIDTH),
+    .RAM_STALL_CYCLES(RAM_STALL_CYCLES)
   ) dut (
     .clk(clk),
     .reset_n(reset_n),

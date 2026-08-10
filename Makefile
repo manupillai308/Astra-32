@@ -62,6 +62,7 @@ run: build
 	  echo "Usage: make run TEST=<name>  (one of: $(TESTS))"; exit 1; \
 	fi
 	@$(MAKE) -s tests/$(TEST)/$(TEST).mem
+	@rm -f tests/$(TEST)/actual_*.hex tests/$(TEST)/sim.log
 	@$(VSIM) +PROGRAM=tests/$(TEST)/$(TEST).mem \
 	         +OUTDIR=tests/$(TEST) \
 	         work.test_bench
@@ -69,7 +70,11 @@ run: build
 # ---- Capture: run then freeze actual_* as expected_* -------------
 .PHONY: capture
 capture: run
-	@for actual in tests/$(TEST)/actual_*.hex; do \
+	@actuals=(tests/$(TEST)/actual_*.hex); \
+	if [ "$${actuals[0]}" = "tests/$(TEST)/actual_*.hex" ]; then \
+	  echo "[FAIL] no actual files produced for $(TEST)"; exit 1; \
+	fi; \
+	for actual in "$${actuals[@]}"; do \
 	  expected=$${actual/actual_/expected_}; \
 	  cp "$$actual" "$$expected"; \
 	done
@@ -82,11 +87,20 @@ capture: run
 test: build asm
 	@pass=0; fail=0; failed=""; \
 	for t in $(TESTS); do \
+	  rm -f tests/$$t/actual_*.hex tests/$$t/sim.log; \
 	  $(VSIM) +PROGRAM=tests/$$t/$$t.mem \
 	          +OUTDIR=tests/$$t \
 	          work.test_bench > tests/$$t/sim.log 2>&1; \
-	  ok=1; \
+	  sim_status=$$?; \
+	  ok=1; actual_count=0; \
+	  if [ $$sim_status -ne 0 ]; then \
+	    ok=0; \
+	  fi; \
 	  for actual in tests/$$t/actual_*.hex; do \
+	    if [ "$$actual" = "tests/$$t/actual_*.hex" ]; then \
+	      break; \
+	    fi; \
+	    actual_count=$$((actual_count+1)); \
 	    expected=$${actual/actual_/expected_}; \
 	    if [ ! -f "$$expected" ]; then \
 	      echo "[MISSING] $$expected"; \
@@ -96,6 +110,20 @@ test: build asm
 	      ok=0; \
 	    fi; \
 	  done; \
+	  for expected in tests/$$t/expected_*.hex; do \
+	    if [ "$$expected" = "tests/$$t/expected_*.hex" ]; then \
+	      break; \
+	    fi; \
+	    actual=$${expected/expected_/actual_}; \
+	    if [ ! -f "$$actual" ]; then \
+	      echo "[MISSING] $$actual"; \
+	      ok=0; \
+	    fi; \
+	  done; \
+	  if [ $$actual_count -eq 0 ]; then \
+	    echo "[MISSING] tests/$$t/actual_*.hex"; \
+	    ok=0; \
+	  fi; \
 	  if [ $$ok -eq 1 ]; then \
 	    echo "[PASS] $$t"; pass=$$((pass+1)); \
 	  else \
