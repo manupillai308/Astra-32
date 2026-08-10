@@ -23,6 +23,7 @@ logic [31:0] cpu_dmem_addr;
 logic [31:0] cpu_dmem_wr_data;
 logic        cpu_dmem_zero_extend;
 logic [31:0] cpu_dmem_rd_data;
+logic        cpu_dmem_busy;
 
 cpu #(
   .RESET_PC(RESET_PC)
@@ -35,7 +36,8 @@ cpu #(
   .dmem_addr        (cpu_dmem_addr),
   .dmem_wr_data     (cpu_dmem_wr_data),
   .dmem_zero_extend (cpu_dmem_zero_extend),
-  .dmem_rd_data     (cpu_dmem_rd_data)
+  .dmem_rd_data     (cpu_dmem_rd_data),
+  .dmem_busy        (cpu_dmem_busy)
 );
 
 bus #(
@@ -55,6 +57,7 @@ bus #(
   .cpu_dmem_wr_data     (cpu_dmem_wr_data),
   .cpu_dmem_zero_extend (cpu_dmem_zero_extend),
   .cpu_dmem_rd_data     (cpu_dmem_rd_data),
+  .cpu_dmem_busy        (cpu_dmem_busy),
   .mmio_led             (mmio_led),
   .uart_rx (uart_rx),
   .uart_tx (uart_tx)

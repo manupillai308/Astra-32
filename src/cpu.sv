@@ -30,7 +30,8 @@ module cpu #(
   output logic [31:0] dmem_addr,
   output logic [31:0] dmem_wr_data,
   output logic        dmem_zero_extend,
-  input  logic [31:0] dmem_rd_data
+  input  logic [31:0] dmem_rd_data,
+  input logic         dmem_busy
 );
 
 // =====================================================
@@ -39,6 +40,8 @@ module cpu #(
 logic [31:0] pc;
 logic        fetch_enable;
 logic        load_use_stall;
+logic        memory_stall;
+logic        pipeline_stall;
 logic        branch_redirect;
 logic [31:0] redirect_target;
 
@@ -106,7 +109,9 @@ logic [31:0] rs2_data_resolved;
 //   and the regfile write at end of WB lands BEFORE the
 //   next instruction's ID-stage regfile read.
 // --------------------------------------------------------
-assign fetch_enable = !load_use_stall;
+assign memory_stall = dmem_busy;
+assign pipeline_stall = load_use_stall || memory_stall;
+assign fetch_enable = !pipeline_stall;
 
 // --------------------------------------------------------
 // Branch / jump redirect
@@ -120,6 +125,15 @@ assign redirect_target = ex_mem.branch_target;
 //   Priority: redirect (overrides any prediction) > fetch (+4).
 //   Otherwise hold.
 // --------------------------------------------------------
+`ifndef SYNTHESIS
+always_ff @(posedge clk) begin
+  if (reset_n) begin
+    assert (!(memory_stall && branch_redirect))
+      else $fatal("branch_redirect during memory_stall");
+  end
+end
+`endif
+
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n)               pc <= RESET_PC;
   else if (branch_redirect)   pc <= redirect_target;
@@ -143,7 +157,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     // Defensive: squash any speculative fetch behind the branch.
     // CONTROL HAZARD: IF/ID flush
     if_id_valid <= 1'b0;
-  end else if (load_use_stall) begin
+  end else if (pipeline_stall) begin
     // hold PC and IF/ID
   end else begin
     if_id_valid <= fetch_enable;
@@ -224,7 +238,11 @@ register_file u_register_file (
 // ID / EX  register
 // --------------------------------------------------------
 always_ff @(posedge clk or negedge reset_n) begin
-  if (!reset_n || load_use_stall) id_ex <= '0;
+  if (!reset_n) id_ex <= '0;
+  else if (memory_stall) begin
+    // Hold the instruction feeding MEM while the bus is busy
+  end
+  else if (load_use_stall) id_ex <= '0;
   else begin
     id_ex.valid            <= if_id_valid && !branch_redirect; // CONTROL HAZARD: ID/EX flush
     id_ex.pc               <= if_id_pc;
@@ -301,6 +319,9 @@ assign ex_next_seq_pc   = id_ex.pc + 32'd4;
 // --------------------------------------------------------
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) ex_mem <= '0;
+  else if (memory_stall) begin
+    // Hold active memory operation stable until the bus completes it. 
+  end
   else begin
     ex_mem.valid            <= id_ex.valid && !branch_redirect;
     ex_mem.alu_res          <= ex_alu_res;
@@ -338,9 +359,13 @@ assign dmem_zero_extend = ex_mem.dmem_zero_extend;
 // --------------------------------------------------------
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) mem_wb <= '0;
+  else if (memory_stall) begin
+    // hold
+  end
   else begin
     mem_wb.valid          <= ex_mem.valid;
     mem_wb.alu_res        <= ex_mem.alu_res;
+    mem_wb.dmem_rd_data   <= dmem_rd_data;
     mem_wb.immediate      <= ex_mem.immediate;
     mem_wb.next_seq_pc    <= ex_mem.next_seq_pc;
     mem_wb.rd_addr        <= ex_mem.rd_addr;
@@ -356,7 +381,7 @@ end
 always_comb begin
   case (mem_wb.rf_wr_data_sel)
     WB_SRC_ALU : wb_data = mem_wb.alu_res;
-    WB_SRC_MEM : wb_data = dmem_rd_data;
+    WB_SRC_MEM : wb_data = mem_wb.dmem_rd_data;
     WB_SRC_IMM : wb_data = mem_wb.immediate;
     WB_SRC_PC  : wb_data = mem_wb.next_seq_pc;
   endcase

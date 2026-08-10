@@ -8,6 +8,7 @@ module data_memory #(
   parameter ADDR_WIDTH = 6  // byte address bits: 2^6 = 64 bytes
 )(
   input logic 				  clk,
+  input logic                 reset_n,
   input  logic                dmem_req,                 
   input  logic                dmem_wr_en,               
   input mem_size_t		      dmem_data_size,           
@@ -15,52 +16,90 @@ module data_memory #(
   input  logic [31:0]         dmem_wr_data,             
   input  logic                dmem_zero_extend,         
 
-  output logic [31:0]         dmem_rd_data              
+  output logic [31:0]         dmem_rd_data,
+  output logic                dmem_busy        
 );
 
 // --------------------------------------------------------
 // RAM Declaration
 // --------------------------------------------------------
 localparam int WORD_ADDR_WIDTH = ADDR_WIDTH - 2;
+localparam logic [1:0] STALL_CYCLES = 2'd2;
 
 (* ram_style = "block" *)
 logic [31:0] mem [0:(2**WORD_ADDR_WIDTH)-1];
-logic [WORD_ADDR_WIDTH-1:0] word_addr;
-logic [1:0] byte_offset;
+logic [WORD_ADDR_WIDTH-1:0] req_word_addr;
+logic [1:0] req_byte_offset;
+logic req_wr_en;
+mem_size_t req_data_size;
+logic [31:0] req_wr_data;
+logic req_zero_extend;
 logic [1:0] ram_byte_offset;
 mem_size_t ram_data_size;
 logic ram_zero_extend;
 logic [31:0] ram_rd_data;
 
-assign word_addr = dmem_addr[ADDR_WIDTH-1:2];
-assign byte_offset = dmem_addr[1:0]; // which byte in that index (notice 4 bytes per index)
+logic busy_q;
+logic [1:0] stall_counter;
+
+assign dmem_busy = busy_q || dmem_req;
 
 // write logic - store
 
-always_ff @ (posedge clk) begin
-  if (dmem_req && dmem_wr_en) begin
-    case (dmem_data_size)
-      BYTE: begin
-        case (byte_offset)
-          2'b00: mem[word_addr][7:0] <= dmem_wr_data[7:0];
-          2'b01: mem[word_addr][15:8] <= dmem_wr_data[7:0];
-          2'b10: mem[word_addr][23:16] <= dmem_wr_data[7:0];
-          default: mem[word_addr][31:24] <= dmem_wr_data[7:0];
+always_ff @ (posedge clk or negedge reset_n) begin
+  if (!reset_n) begin
+    busy_q <= 1'b0;
+    stall_counter <= '0;
+    req_word_addr <= '0;
+    req_byte_offset <= '0;
+    req_wr_en <= 1'b0;
+    req_data_size <= WORD;
+    req_wr_data <= 32'h0;
+    req_zero_extend <= 1'b0;
+    ram_rd_data <= 32'h0;
+    ram_zero_extend <= 1'b0;
+    ram_data_size <= WORD;
+    ram_byte_offset <= '0;
+  end else if (!busy_q && dmem_req) begin
+    busy_q <= 1'b1;
+    stall_counter <= STALL_CYCLES;
+    req_word_addr <= dmem_addr[ADDR_WIDTH-1:2];
+    req_byte_offset <= dmem_addr[1:0];
+    req_wr_en <= dmem_wr_en;
+    req_data_size <= dmem_data_size;
+    req_wr_data <= dmem_wr_data;
+    req_zero_extend <= dmem_zero_extend;
+  end else if (busy_q) begin
+    if (stall_counter != '0) begin
+      stall_counter <= stall_counter - 1'b1;
+    end else begin
+      busy_q <= 1'b0;
+
+      if (req_wr_en) begin
+        case (req_data_size)
+          BYTE: begin
+            case (req_byte_offset)
+              2'b00: mem[req_word_addr][7:0] <= req_wr_data[7:0];
+              2'b01: mem[req_word_addr][15:8] <= req_wr_data[7:0];
+              2'b10: mem[req_word_addr][23:16] <= req_wr_data[7:0];
+              default: mem[req_word_addr][31:24] <= req_wr_data[7:0];
+            endcase
+          end
+          HALF_WORD: begin // RISC RV32I is aligned, div by 2 for HALF_WORD, div by 4 for WORD
+            if (req_byte_offset == 2'b00) mem[req_word_addr][15:0] <= req_wr_data[15:0];
+            else if (req_byte_offset == 2'b10) mem[req_word_addr][31:16] <= req_wr_data[15:0];
+          end
+          WORD: begin
+            if (req_byte_offset == 2'b00) mem[req_word_addr] <= req_wr_data;
+          end
         endcase
+      end else begin
+        ram_rd_data <= mem[req_word_addr];
+        ram_zero_extend <= req_zero_extend;
+        ram_data_size <= req_data_size;
+        ram_byte_offset <= req_byte_offset;
       end
-      HALF_WORD: begin // RISC RV32I is aligned, div by 2 for HALF_WORD, div by 4 for WORD
-        if (byte_offset == 2'b00) mem[word_addr][15:0] <= dmem_wr_data[15:0];
-        else if (byte_offset == 2'b10) mem[word_addr][31:16] <= dmem_wr_data[15:0];
-      end
-      WORD: begin
-        if (byte_offset == 2'b00) mem[word_addr] <= dmem_wr_data;
-      end
-    endcase
-  end else if (dmem_req && !dmem_wr_en) begin
-    ram_rd_data <= mem[word_addr];
-    ram_zero_extend <= dmem_zero_extend;
-    ram_data_size <= dmem_data_size;
-    ram_byte_offset <= byte_offset;
+    end
   end
 end
 

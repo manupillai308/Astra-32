@@ -220,6 +220,7 @@ typedef struct packed {
 typedef struct packed {
     logic        valid;
     logic [31:0] alu_res;
+    logic [31:0] dmem_rd_data;
     logic [31:0] immediate;
     logic [31:0] next_seq_pc;
     logic [4:0]  rd_addr;
