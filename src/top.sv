@@ -2,7 +2,8 @@ import risc_pkg::*;
 
 module top #(
   parameter RESET_PC = 32'h0000,
-  parameter RAM_ADDR_WIDTH = 10,
+  parameter logic [31:0] RAM_BASE_ADDR = 32'h8000_0000,
+  parameter int RAM_ADDR_WIDTH = 28,
   parameter LED_WIDTH = 3,
   parameter LED_BASE_ADDR = 32'h1000_0000,
   parameter UART_BASE_ADDR = 32'h1000_0010,
@@ -14,7 +15,22 @@ module top #(
   input  logic                 reset_n,
   output logic [LED_WIDTH-1:0] mmio_led,
   input logic uart_rx,
-  output logic uart_tx
+  output logic uart_tx,
+
+  output logic [27:0] app_addr,
+  output logic [2:0]  app_cmd,
+  output logic        app_en,
+  input  logic        app_rdy,
+
+  output logic [63:0] app_wdf_data,
+  output logic        app_wdf_end,
+  output logic [7:0]  app_wdf_mask,
+  output logic        app_wdf_wren,
+  input  logic        app_wdf_rdy,
+
+  input  logic [63:0] app_rd_data,
+  input  logic        app_rd_data_end,
+  input  logic        app_rd_data_valid
 );
 
 logic        cpu_dmem_req;
@@ -42,13 +58,13 @@ cpu #(
 );
 
 bus #(
+  .RAM_BASE_ADDR (RAM_BASE_ADDR),
   .RAM_ADDR_WIDTH (RAM_ADDR_WIDTH),
   .LED_WIDTH      (LED_WIDTH),
   .LED_BASE_ADDR  (LED_BASE_ADDR),
   .UART_BASE_ADDR (UART_BASE_ADDR),
   .CLK_HZ (CLK_HZ),
-  .UART_BAUD (UART_BAUD),
-  .RAM_STALL_CYCLES (RAM_STALL_CYCLES)
+  .UART_BAUD (UART_BAUD)
 ) u_bus (
   .clk                  (clk),
   .reset_n              (reset_n),
@@ -62,7 +78,19 @@ bus #(
   .cpu_dmem_busy        (cpu_dmem_busy),
   .mmio_led             (mmio_led),
   .uart_rx (uart_rx),
-  .uart_tx (uart_tx)
+  .uart_tx (uart_tx),
+  .app_addr (app_addr),
+  .app_cmd (app_cmd),
+  .app_en (app_en),
+  .app_rdy (app_rdy),
+  .app_wdf_data (app_wdf_data),
+  .app_wdf_end (app_wdf_end),
+  .app_wdf_mask (app_wdf_mask),
+  .app_wdf_wren (app_wdf_wren),
+  .app_wdf_rdy (app_wdf_rdy),
+  .app_rd_data (app_rd_data),
+  .app_rd_data_end (app_rd_data_end),
+  .app_rd_data_valid (app_rd_data_valid)
 );
 
 endmodule
