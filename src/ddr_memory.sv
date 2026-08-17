@@ -34,10 +34,13 @@ module ddr_memory (
   input  logic        app_rd_data_valid
 );
 
-localparam logic [2:0] MIG_CMD_READ = 3'b001;
+localparam logic [2:0] MIG_CMD_WRITE = 3'b000;
+localparam logic [2:0] MIG_CMD_READ  = 3'b001;
 
 typedef enum logic [2:0] {
   ST_IDLE,
+  ST_LAUNCH_WRITE,
+  ST_WAIT_WRITE,
   ST_LAUNCH_READ,
   ST_WAIT_READ_CMD,
   ST_WAIT_READ_DATA,
@@ -48,12 +51,20 @@ state_t state_q;
 
 mem_size_t   req_data_size;
 logic [31:0] req_addr;
+logic [31:0] req_wr_data;
 logic        req_zero_extend;
 
 logic [127:0] rd_line_q;
 logic         read_beat_q;
 logic         read_cmd_done_q;
 logic [31:0] rd_word_data;
+logic [127:0] wr_line_data;
+logic [15:0]  wr_line_mask;
+logic         write_cmd_done_q;
+logic         write_second_beat_q;
+logic         write_data_done_q;
+logic [7:0]   rd_byte_data;
+logic [15:0]  rd_half_data;
 
 assign dmem_busy = dmem_req || (state_q != ST_IDLE);
 
@@ -63,11 +74,15 @@ always_ff @(posedge clk or negedge reset_n) begin
 
     req_data_size <= WORD;
     req_addr <= 32'h0;
+    req_wr_data <= 32'h0;
     req_zero_extend <= 1'b0;
 
     rd_line_q <= 128'h0;
     read_beat_q <= 1'b0;
     read_cmd_done_q <= 1'b0;
+    write_cmd_done_q <= 1'b0;
+    write_second_beat_q <= 1'b0;
+    write_data_done_q <= 1'b0;
 
     app_addr <= 28'h0;
     app_cmd <= MIG_CMD_READ;
@@ -78,26 +93,69 @@ always_ff @(posedge clk or negedge reset_n) begin
     app_wdf_mask <= 8'hff;
     app_wdf_wren <= 1'b0;
   end else begin
-    app_wdf_data <= 64'h0;
-    app_wdf_end <= 1'b0;
-    app_wdf_mask <= 8'hff;
-    app_wdf_wren <= 1'b0;
-
     unique case (state_q)
       ST_IDLE: begin
         app_en <= 1'b0;
+        app_wdf_wren <= 1'b0;
+        app_wdf_end <= 1'b0;
+        app_wdf_mask <= 8'hff;
         read_beat_q <= 1'b0;
+        write_cmd_done_q <= 1'b0;
+        write_second_beat_q <= 1'b0;
+        write_data_done_q <= 1'b0;
 
         if (dmem_req) begin
           req_data_size <= dmem_data_size;
           req_addr <= dmem_addr;
+          req_wr_data <= dmem_wr_data;
           req_zero_extend <= dmem_zero_extend;
 
           if (dmem_wr_en) begin
-            state_q <= ST_DONE;
+            state_q <= ST_LAUNCH_WRITE;
           end else begin
             state_q <= ST_LAUNCH_READ;
           end
+        end
+      end
+
+      ST_LAUNCH_WRITE: begin
+        app_addr <= dmem_addr_to_app_addr(req_addr);
+        app_cmd <= MIG_CMD_WRITE;
+        app_en <= 1'b1;
+
+        app_wdf_data <= wr_line_data[63:0];
+        app_wdf_mask <= wr_line_mask[7:0];
+        app_wdf_wren <= 1'b1;
+        app_wdf_end <= 1'b0;
+
+        write_cmd_done_q <= 1'b0;
+        write_second_beat_q <= 1'b0;
+        write_data_done_q <= 1'b0;
+        state_q <= ST_WAIT_WRITE;
+      end
+
+      ST_WAIT_WRITE: begin
+        if (app_en && app_rdy) begin
+          app_en <= 1'b0;
+          write_cmd_done_q <= 1'b1;
+        end
+
+        if (app_wdf_wren && app_wdf_rdy) begin
+          if (!write_second_beat_q) begin
+            app_wdf_data <= wr_line_data[127:64];
+            app_wdf_mask <= wr_line_mask[15:8];
+            app_wdf_end <= 1'b1;
+            write_second_beat_q <= 1'b1;
+          end else begin
+            app_wdf_wren <= 1'b0;
+            app_wdf_end <= 1'b0;
+            app_wdf_mask <= 8'hff;
+            write_data_done_q <= 1'b1;
+          end
+        end
+
+        if (write_cmd_done_q && write_data_done_q) begin
+          state_q <= ST_DONE;
         end
       end
 
@@ -105,6 +163,9 @@ always_ff @(posedge clk or negedge reset_n) begin
         app_addr <= dmem_addr_to_app_addr(req_addr);
         app_cmd <= MIG_CMD_READ;
         app_en <= 1'b1;
+        app_wdf_wren <= 1'b0;
+        app_wdf_end <= 1'b0;
+        app_wdf_mask <= 8'hff;
         read_beat_q <= 1'b0;
         read_cmd_done_q <= 1'b0;
         state_q <= ST_WAIT_READ_CMD;
@@ -148,6 +209,9 @@ always_ff @(posedge clk or negedge reset_n) begin
 
       default: begin
         app_en <= 1'b0;
+        app_wdf_wren <= 1'b0;
+        app_wdf_end <= 1'b0;
+        app_wdf_mask <= 8'hff;
         state_q <= ST_IDLE;
       end
     endcase
@@ -155,30 +219,50 @@ always_ff @(posedge clk or negedge reset_n) begin
 end
 
 always_comb begin
-  unique case (req_addr[3:2])
-    2'h0: rd_word_data = rd_line_q[31:0];
-    2'h1: rd_word_data = rd_line_q[63:32];
-    2'h2: rd_word_data = rd_line_q[95:64];
-    2'h3: rd_word_data = rd_line_q[127:96];
-    default: rd_word_data = 32'h0;
+  wr_line_data = 128'h0;
+  wr_line_mask = 16'hffff;
+
+  unique case (req_data_size)
+    BYTE: begin
+      // wr_line_data[start_index +: width] = wr_line_data[start_index + width - 1 : start_index]
+      wr_line_data[8 * req_addr[3:0] +: 8] = req_wr_data[7:0];
+      wr_line_mask[req_addr[3:0]] = 1'b0;
+    end
+
+    HALF_WORD: begin
+      wr_line_data[8 * {req_addr[3:1], 1'b0} +: 16] = req_wr_data[15:0];
+      wr_line_mask[{req_addr[3:1], 1'b0} +: 2] = 2'b00;
+    end
+
+    WORD: begin
+      wr_line_data[8 * {req_addr[3:2], 2'b00} +: 32] = req_wr_data;
+      wr_line_mask[{req_addr[3:2], 2'b00} +: 4] = 4'b0000;
+    end
+
+    default: begin
+      wr_line_data = 128'h0;
+      wr_line_mask = 16'hffff;
+    end
   endcase
 end
+
+// we are aligning down misaligned reads (in RISC-V, address is 4 bytes aligned but unaligned is not forbidden and behaviour depends on implementation)
+assign rd_byte_data = rd_line_q[8 * req_addr[3:0] +: 8];
+assign rd_half_data = rd_line_q[8 * {req_addr[3:1], 1'b0} +: 16];
+assign rd_word_data = rd_line_q[8 * {req_addr[3:2], 2'b00} +: 32];
 
 always_comb begin
   unique case (req_data_size)
     BYTE: begin
-      unique case (req_addr[1:0])
-        2'b00: dmem_rd_data = req_zero_extend ? {24'h0, rd_word_data[7:0]} : {{24{rd_word_data[7]}}, rd_word_data[7:0]};
-        2'b01: dmem_rd_data = req_zero_extend ? {24'h0, rd_word_data[15:8]} : {{24{rd_word_data[15]}}, rd_word_data[15:8]};
-        2'b10: dmem_rd_data = req_zero_extend ? {24'h0, rd_word_data[23:16]} : {{24{rd_word_data[23]}}, rd_word_data[23:16]};
-        default: dmem_rd_data = req_zero_extend ? {24'h0, rd_word_data[31:24]} : {{24{rd_word_data[31]}}, rd_word_data[31:24]};
-      endcase
+      dmem_rd_data = req_zero_extend ?
+        {24'h0, rd_byte_data} :
+        {{24{rd_byte_data[7]}}, rd_byte_data};
     end
 
     HALF_WORD: begin
       dmem_rd_data = req_zero_extend ?
-        (req_addr[1] ? {16'h0, rd_word_data[31:16]} : {16'h0, rd_word_data[15:0]}) :
-        (req_addr[1] ? {{16{rd_word_data[31]}}, rd_word_data[31:16]} : {{16{rd_word_data[15]}}, rd_word_data[15:0]});
+        {16'h0, rd_half_data} :
+        {{16{rd_half_data[15]}}, rd_half_data};
     end
 
     WORD: begin
