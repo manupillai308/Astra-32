@@ -1,29 +1,52 @@
+`timescale 1ps/1ps
+
 module test_bench();
 
   // ----------------------------------------------------------------
   // Harness parameters
-  //   HALT_ADDR : DMEM byte address the program writes to signal "done".
-  //               Convention: last word of the 64-byte DMEM (0x3C).
-  //   MAX_CYCLES: safety net so a buggy program can't loop forever.
+  //   Tests report completion through LED MMIO:
+  //     1 = pass
+  //     2 = fail
+  //   MAX_CYCLES counts MIG ui_clk cycles.
   // ----------------------------------------------------------------
-  parameter int HALT_ADDR  = 60;       // 0x3C
-  // UART tests need ~1040 cycles per transmitted byte at 12 MHz / 115200 baud.
-  parameter int MAX_CYCLES = 10000;
+  parameter int MAX_CYCLES = 1_000_000;
   localparam int LED_WIDTH = 3;
-  localparam int RAM_ADDR_WIDTH = 12;
-  localparam int DMEM_BYTES = 2**RAM_ADDR_WIDTH;
-  localparam int UART_CLKS_PER_BIT = 12_000_000 / 115_200;
+  localparam logic [LED_WIDTH-1:0] TEST_PASS_LED = 3'h1;
+  localparam logic [LED_WIDTH-1:0] TEST_FAIL_LED = 3'h2;
+  localparam int CLK_HZ = 162_500_000;
+  localparam int UART_BAUD = 115_200;
+  localparam int UART_CLKS_PER_BIT = CLK_HZ / UART_BAUD;
   localparam int UART_MAX_CAPTURED_BYTES = 256;
-  parameter int RAM_STALL_CYCLES = 2;
 
-  logic   clk;
-  logic   reset_n;
+  logic clk_100mhz;
+  logic clk_12mhz;
+  logic reset_n;
   integer cycle_count = 0;
-  logic [LED_WIDTH-1:0] mmio_led;
   logic uart_rx;
   logic uart_tx;
+  logic [3:0] led;
+  logic [LED_WIDTH-1:0] mmio_led;
   logic [7:0] uart_tx_bytes [0:UART_MAX_CAPTURED_BYTES-1];
   integer uart_tx_count = 0;
+
+  wire [15:0] ddr3_dq;
+  wire [1:0]  ddr3_dqs_n;
+  wire [1:0]  ddr3_dqs_p;
+  wire [13:0] ddr3_addr;
+  wire [2:0]  ddr3_ba;
+  wire        ddr3_ras_n;
+  wire        ddr3_cas_n;
+  wire        ddr3_we_n;
+  wire        ddr3_reset_n;
+  wire [0:0]  ddr3_ck_p;
+  wire [0:0]  ddr3_ck_n;
+  wire [0:0]  ddr3_cke;
+  wire [0:0]  ddr3_cs_n;
+  wire [1:0]  ddr3_dm;
+  wire [0:0]  ddr3_odt;
+
+  wire soc_clk = dut.ui_clk;
+  wire soc_reset_n = dut.soc_reset_n;
 
   typedef enum logic [1:0] {
     UART_MON_IDLE = 2'b00,
@@ -36,45 +59,76 @@ module test_bench();
   logic [2:0]      uart_bit_index;
   logic [7:0]      uart_tx_byte;
 
-  // 10-time-unit clock period
-  always #5 clk = ~clk;
+  assign mmio_led = led[3:1];
 
-  top #(
-    .RESET_PC(32'h0),
-    .LED_WIDTH(LED_WIDTH),
-    .RAM_ADDR_WIDTH(RAM_ADDR_WIDTH),
-    .RAM_STALL_CYCLES(RAM_STALL_CYCLES)
+  // 100 MHz and 12 MHz board clocks, in ps.
+  always #5000  clk_100mhz = ~clk_100mhz;
+  always #41667 clk_12mhz = ~clk_12mhz;
+
+  fpga_top #(
+    .CLK_HZ(CLK_HZ),
+    .UART_BAUD(UART_BAUD)
   ) dut (
-    .clk(clk),
+    .clk_100mhz(clk_100mhz),
+    .clk_12mhz(clk_12mhz),
     .reset_n(reset_n),
-    .mmio_led(mmio_led),
+    .ddr3_dqs_n(ddr3_dqs_n),
+    .ddr3_dq(ddr3_dq),
+    .ddr3_dqs_p(ddr3_dqs_p),
+    .ddr3_addr(ddr3_addr),
+    .ddr3_ba(ddr3_ba),
+    .ddr3_ras_n(ddr3_ras_n),
+    .ddr3_cas_n(ddr3_cas_n),
+    .ddr3_we_n(ddr3_we_n),
+    .ddr3_reset_n(ddr3_reset_n),
+    .ddr3_ck_p(ddr3_ck_p),
+    .ddr3_ck_n(ddr3_ck_n),
+    .ddr3_cke(ddr3_cke),
+    .ddr3_cs_n(ddr3_cs_n),
+    .ddr3_dm(ddr3_dm),
+    .ddr3_odt(ddr3_odt),
     .uart_rx(uart_rx),
-    .uart_tx(uart_tx)
+    .uart_tx(uart_tx),
+    .led(led)
   );
 
-  function automatic logic [7:0] dmem_byte(input int unsigned byte_addr);
-    unique case (byte_addr[1:0])
-      2'b00: dmem_byte = dut.u_bus.u_data_memory.mem[byte_addr[31:2]][7:0];
-      2'b01: dmem_byte = dut.u_bus.u_data_memory.mem[byte_addr[31:2]][15:8];
-      2'b10: dmem_byte = dut.u_bus.u_data_memory.mem[byte_addr[31:2]][23:16];
-      default: dmem_byte = dut.u_bus.u_data_memory.mem[byte_addr[31:2]][31:24];
-    endcase
-  endfunction
+  ddr3_model u_ddr3_model (
+    .rst_n(ddr3_reset_n),
+    .ck(ddr3_ck_p[0]),
+    .ck_n(ddr3_ck_n[0]),
+    .cke(ddr3_cke[0]),
+    .cs_n(ddr3_cs_n[0]),
+    .ras_n(ddr3_ras_n),
+    .cas_n(ddr3_cas_n),
+    .we_n(ddr3_we_n),
+    .dm_tdqs(ddr3_dm),
+    .ba(ddr3_ba),
+    .addr(ddr3_addr),
+    .dq(ddr3_dq),
+    .dqs(ddr3_dqs_p),
+    .dqs_n(ddr3_dqs_n),
+    .tdqs_n(),
+    .odt(ddr3_odt[0])
+  );
 
   // ----------------------------------------------------------------
   // Halt detection + timeout
-  //   The program signals completion by storing a non-zero value at
-  //   DMEM[HALT_ADDR]. If that never happens within MAX_CYCLES the
-  //   test fails.
   // ----------------------------------------------------------------
-  always @(posedge clk) begin
+  always @(posedge soc_reset_n) begin
+    $display("[INFO] SoC reset released at %0t", $time);
+  end
+
+  always @(posedge soc_clk) begin
     cycle_count <= cycle_count + 1;
 
-    if (reset_n &&
-        dmem_byte(HALT_ADDR) !== 8'h00 &&
-        dmem_byte(HALT_ADDR) !== 8'hxx) begin
-      $display("[PASS] halt detected at cycle %0d (dmem[0x%0h]=0x%0h)",
-               cycle_count, HALT_ADDR, dmem_byte(HALT_ADDR));
+    if (soc_reset_n && mmio_led == TEST_PASS_LED) begin
+      $display("[PASS] pass LED detected at cycle %0d", cycle_count);
+      dump_state();
+      $finish;
+    end
+
+    if (soc_reset_n && mmio_led == TEST_FAIL_LED) begin
+      $display("[FAIL] fail LED detected at cycle %0d", cycle_count);
       dump_state();
       $finish;
     end
@@ -88,11 +142,9 @@ module test_bench();
 
   // ----------------------------------------------------------------
   // UART TX capture
-  //   Decodes the top-level UART TX pin back into bytes and writes
-  //   actual_uart_tx.hex for comparison/capture by the test harness.
   // ----------------------------------------------------------------
-  always @(negedge clk or negedge reset_n) begin
-    if (!reset_n) begin
+  always @(negedge soc_clk or negedge soc_reset_n) begin
+    if (!soc_reset_n) begin
       uart_mon_state    <= UART_MON_IDLE;
       uart_sample_count <= 0;
       uart_bit_index    <= '0;
@@ -143,32 +195,13 @@ module test_bench();
     end
   end
 
-  // ----------------------------------------------------------------
-  // dump_state
-  //   Writes the final register file and data memory to per-test
-  //   output files. OUTDIR is provided via +OUTDIR=<path> plusarg
-  //   (defaults to current directory).
-  //   $writememh produces ASCII hex that downstream `diff` can
-  //   compare against captured golden files.
-  // ----------------------------------------------------------------
   task dump_state;
     string outdir;
-    integer dmem_file;
     integer led_file;
     integer uart_file;
     integer i;
     if (!$value$plusargs("OUTDIR=%s", outdir)) outdir = ".";
-    $writememh({outdir, "/actual_regs.hex"}, dut.u_cpu.u_register_file.regs);
-
-    dmem_file = $fopen({outdir, "/actual_dmem.hex"}, "w");
-    if (dmem_file) begin
-      for (i = 0; i < DMEM_BYTES; i = i + 1) begin
-        $fdisplay(dmem_file, "%02h", dmem_byte(i));
-      end
-      $fclose(dmem_file);
-    end else begin
-      $display("[WARN] could not open %s", {outdir, "/actual_dmem.hex"});
-    end
+    $writememh({outdir, "/actual_regs.hex"}, dut.u_top.u_cpu.u_register_file.regs);
 
     led_file = $fopen({outdir, "/actual_led.hex"}, "w");
     if (led_file) begin
@@ -189,14 +222,12 @@ module test_bench();
     end
   endtask
 
-  // ----------------------------------------------------------------
-  // Reset sequence
-  // ----------------------------------------------------------------
   initial begin
-    clk     = 0;
+    clk_100mhz = 0;
+    clk_12mhz = 0;
     reset_n = 0;
     uart_rx = 1;
-    #10 reset_n = 1;
+    #200000 reset_n = 1;
   end
 
 endmodule
