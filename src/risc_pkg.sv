@@ -235,6 +235,7 @@ typedef struct packed {
     logic [4:0]  rd_addr;
     logic        rf_wr_en;
     wb_src_t     rf_wr_data_sel;
+    logic [31:0] wb_data;
 } mem_wb_t;
 
 

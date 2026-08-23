@@ -227,7 +227,7 @@ register_file u_register_file (
     .rs2_addr (id_rs2_addr),
     .rd_addr  (mem_wb.rd_addr),
     .rf_wr_en (wb_commit),
-    .wr_data  (wb_data),
+    .wr_data  (mem_wb.wb_data),
     .rs1_data (id_rs1_data),
     .rs2_data (id_rs2_data)
 );
@@ -305,14 +305,14 @@ always_comb begin
   case (id_ex.fwd_a_sel)
     FWD_RF:    rs1_data_resolved = id_ex.rs1_data;
     FWD_EXMEM: rs1_data_resolved = ex_mem.forward_data;
-    FWD_MEMWB: rs1_data_resolved = wb_data;
+    FWD_MEMWB: rs1_data_resolved = mem_wb.wb_data;
     default:   rs1_data_resolved = id_ex.rs1_data;
   endcase
   
   case (id_ex.fwd_b_sel)
     FWD_RF:    rs2_data_resolved = id_ex.rs2_data;
     FWD_EXMEM: rs2_data_resolved = ex_mem.forward_data;
-    FWD_MEMWB: rs2_data_resolved = wb_data;
+    FWD_MEMWB: rs2_data_resolved = mem_wb.wb_data;
     default:   rs2_data_resolved = id_ex.rs2_data;
   endcase
 end
@@ -393,6 +393,20 @@ assign dmem_zero_extend = ex_mem.dmem_zero_extend;
 // MEM / WB  register
 //   dmem_rd_data is provided by the SoC memory system in the WB cycle.
 // --------------------------------------------------------
+
+// --------------------------------------------------------
+// WB stage : writeback mux. Sync write happens inside
+// register_file at posedge, gated by (mem_wb.valid & rf_wr_en).
+// --------------------------------------------------------
+always_comb begin
+  case (ex_mem.rf_wr_data_sel)
+    WB_SRC_ALU : wb_data = ex_mem.alu_res;
+    WB_SRC_MEM : wb_data = dmem_rd_data;
+    WB_SRC_IMM : wb_data = ex_mem.immediate;
+    WB_SRC_PC  : wb_data = ex_mem.next_seq_pc;
+  endcase
+end
+
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) begin
     mem_wb <= '0;
@@ -412,20 +426,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     mem_wb.rf_wr_en       <= ex_mem.rf_wr_en;
     mem_wb.rf_wr_data_sel <= ex_mem.rf_wr_data_sel;
     mem_wb_committed      <= 1'b0;
+    mem_wb.wb_data        <= wb_data;
   end
-end
-
-// --------------------------------------------------------
-// WB stage : writeback mux. Sync write happens inside
-// register_file at posedge, gated by (mem_wb.valid & rf_wr_en).
-// --------------------------------------------------------
-always_comb begin
-  case (mem_wb.rf_wr_data_sel)
-    WB_SRC_ALU : wb_data = mem_wb.alu_res;
-    WB_SRC_MEM : wb_data = mem_wb.dmem_rd_data;
-    WB_SRC_IMM : wb_data = mem_wb.immediate;
-    WB_SRC_PC  : wb_data = mem_wb.next_seq_pc;
-  endcase
 end
 
 endmodule
