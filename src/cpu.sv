@@ -265,8 +265,6 @@ always_ff @(posedge clk or negedge reset_n) begin
   else begin
     id_ex.valid            <= if_id_valid && !branch_redirect; // CONTROL HAZARD: ID/EX flush
     id_ex.pc               <= if_id_pc;
-    id_ex.rs1_addr         <= id_rs1_addr;
-    id_ex.rs2_addr         <= id_rs2_addr;
     id_ex.rs1_data         <= id_rs1_data;
     id_ex.rs2_data         <= id_rs2_data;
     id_ex.immediate        <= id_immediate;
@@ -285,6 +283,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     id_ex.rf_wr_data_sel   <= id_rf_wr_data_sel;
     id_ex.fwd_a_sel        <= id_fwd_a_sel;
     id_ex.fwd_b_sel        <= id_fwd_b_sel;
+    id_ex.load_from_memory <= (id_rf_wr_data_sel == WB_SRC_MEM);
   end
 end
 
@@ -361,8 +360,6 @@ always_ff @(posedge clk or negedge reset_n) begin
     ex_mem.valid            <= id_ex.valid && !branch_redirect;
     ex_mem.alu_res          <= ex_alu_res;
     ex_mem.rs2_data         <= rs2_data_resolved;
-    ex_mem.immediate        <= id_ex.immediate;
-    ex_mem.next_seq_pc      <= ex_next_seq_pc;
     ex_mem.branch_target    <= ex_branch_target;
     ex_mem.rd_addr          <= id_ex.rd_addr;
     ex_mem.branch_taken     <= ex_branch_taken;
@@ -372,8 +369,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     ex_mem.dmem_size        <= id_ex.dmem_size;
     ex_mem.dmem_zero_extend <= id_ex.dmem_zero_extend;
     ex_mem.rf_wr_en         <= id_ex.rf_wr_en;
-    ex_mem.rf_wr_data_sel   <= id_ex.rf_wr_data_sel;
     ex_mem.forward_data     <= ex_mem_forward_data;
+    ex_mem.load_from_memory <= id_ex.load_from_memory;
   end
 end
 
@@ -399,12 +396,10 @@ assign dmem_zero_extend = ex_mem.dmem_zero_extend;
 // register_file at posedge, gated by (mem_wb.valid & rf_wr_en).
 // --------------------------------------------------------
 always_comb begin
-  case (ex_mem.rf_wr_data_sel)
-    WB_SRC_ALU : wb_data = ex_mem.alu_res;
-    WB_SRC_MEM : wb_data = dmem_rd_data;
-    WB_SRC_IMM : wb_data = ex_mem.immediate;
-    WB_SRC_PC  : wb_data = ex_mem.next_seq_pc;
-  endcase
+  if (ex_mem.load_from_memory)
+    wb_data = dmem_rd_data;
+  else
+    wb_data = ex_mem.forward_data;
 end
 
 always_ff @(posedge clk or negedge reset_n) begin
@@ -418,13 +413,8 @@ always_ff @(posedge clk or negedge reset_n) begin
   end
   else begin
     mem_wb.valid          <= ex_mem.valid;
-    mem_wb.alu_res        <= ex_mem.alu_res;
-    mem_wb.dmem_rd_data   <= dmem_rd_data;
-    mem_wb.immediate      <= ex_mem.immediate;
-    mem_wb.next_seq_pc    <= ex_mem.next_seq_pc;
     mem_wb.rd_addr        <= ex_mem.rd_addr;
     mem_wb.rf_wr_en       <= ex_mem.rf_wr_en;
-    mem_wb.rf_wr_data_sel <= ex_mem.rf_wr_data_sel;
     mem_wb_committed      <= 1'b0;
     mem_wb.wb_data        <= wb_data;
   end

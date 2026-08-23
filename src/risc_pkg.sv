@@ -175,8 +175,6 @@ typedef enum logic [1:0] {
 typedef struct packed {
     logic        valid;
     logic [31:0] pc;                // for AUIPC / branch target
-    logic [4:0]  rs1_addr;
-    logic [4:0]  rs2_addr;
     logic [31:0] rs1_data;
     logic [31:0] rs2_data;
     logic [31:0] immediate;
@@ -199,6 +197,7 @@ typedef struct packed {
     wb_src_t     rf_wr_data_sel;
     fwd_flag_t   fwd_a_sel;
     fwd_flag_t   fwd_b_sel;
+    logic        load_from_memory;
 } id_ex_t;
 
 // EX/MEM: ALU result + resolved branch + remaining MEM/WB controls
@@ -206,8 +205,6 @@ typedef struct packed {
     logic        valid;
     logic [31:0] alu_res;
     logic [31:0] rs2_data;          // for stores
-    logic [31:0] immediate;         // for LUI WB
-    logic [31:0] next_seq_pc;       // for JAL/JALR WB (= pc + 4)
     logic [31:0] branch_target;     // {alu_res[31:1], 1'b0}
     logic [4:0]  rd_addr;
     // Resolved branch
@@ -220,24 +217,18 @@ typedef struct packed {
     logic        dmem_zero_extend;
     // WB controls
     logic        rf_wr_en;
-    wb_src_t     rf_wr_data_sel;
     logic [31:0] forward_data;
+    logic        load_from_memory;
 } ex_mem_t;
 
 // MEM/WB: writeback inputs. dmem_rd_data is taken straight off the
 // dmem output reg during the WB cycle (not stored here).
 typedef struct packed {
     logic        valid;
-    logic [31:0] alu_res;
-    logic [31:0] dmem_rd_data;
-    logic [31:0] immediate;
-    logic [31:0] next_seq_pc;
     logic [4:0]  rd_addr;
     logic        rf_wr_en;
-    wb_src_t     rf_wr_data_sel;
     logic [31:0] wb_data;
 } mem_wb_t;
-
 
 endpackage
 
