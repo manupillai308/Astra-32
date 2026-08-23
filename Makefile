@@ -66,7 +66,7 @@ run: build
 	@rm -f tests/$(TEST)/actual_*.hex tests/$(TEST)/sim.log
 	@$(VSIM) +PROGRAM=tests/$(TEST)/$(TEST).mem \
 	         +OUTDIR=tests/$(TEST) \
-	         work.test_bench
+	         work.test_bench_data_memory
 
 # ---- Capture: run then freeze actual_* as expected_* -------------
 .PHONY: capture
@@ -97,7 +97,7 @@ test: build asm
 	  rm -f tests/$$t/actual_*.hex tests/$$t/sim.log; \
 	  $(VSIM) +PROGRAM=tests/$$t/$$t.mem \
 	          +OUTDIR=tests/$$t \
-	          work.test_bench > tests/$$t/sim.log 2>&1; \
+	          work.test_bench_data_memory > tests/$$t/sim.log 2>&1; \
 	  sim_status=$$?; \
 	  ok=1; actual_count=0; \
 	  if [ $$sim_status -ne 0 ]; then \

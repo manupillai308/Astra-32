@@ -166,6 +166,12 @@ typedef struct packed {
 // --------------------------------------------------------
 
 // ID/EX: decoded instruction + read register values + control
+typedef enum logic [1:0] {
+  FWD_RF,
+  FWD_EXMEM,
+  FWD_MEMWB
+} fwd_flag_t;
+
 typedef struct packed {
     logic        valid;
     logic [31:0] pc;                // for AUIPC / branch target
@@ -191,6 +197,8 @@ typedef struct packed {
     // WB controls
     logic        rf_wr_en;
     wb_src_t     rf_wr_data_sel;
+    fwd_flag_t   fwd_a_sel;
+    fwd_flag_t   fwd_b_sel;
 } id_ex_t;
 
 // EX/MEM: ALU result + resolved branch + remaining MEM/WB controls
@@ -213,6 +221,7 @@ typedef struct packed {
     // WB controls
     logic        rf_wr_en;
     wb_src_t     rf_wr_data_sel;
+    logic [31:0] forward_data;
 } ex_mem_t;
 
 // MEM/WB: writeback inputs. dmem_rd_data is taken straight off the

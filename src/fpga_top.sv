@@ -103,19 +103,16 @@ wire         app_zq_ack;
 
 wire [11:0]  device_temp;
 
-assign soc_reset_request = !reset_n || ui_clk_sync_rst || !init_calib_complete;
-
-always_ff @(posedge ui_clk or posedge soc_reset_request) begin
-  if (soc_reset_request) begin
+always_ff @(posedge ui_clk) begin
+  if (ui_clk_sync_rst || !init_calib_complete)
     soc_reset_sync <= 2'b00;
-  end else begin
+  else
     soc_reset_sync <= {soc_reset_sync[0], 1'b1};
-  end
 end
 
 assign soc_reset_n = soc_reset_sync[1];
 
-always_ff @(posedge ui_clk or negedge soc_reset_n) begin
+always_ff @(posedge ui_clk) begin
   if (!soc_reset_n) heartbeat_counter <= '0;
   else              heartbeat_counter <= heartbeat_counter + 1'b1;
 end

@@ -105,6 +105,7 @@ logic forward_b_from_mem_wb;
 
 logic [31:0] rs1_data_resolved;
 logic [31:0] rs2_data_resolved;
+logic [31:0] ex_mem_forward_data;
 // --------------------------------------------------------
 // Fetch gate
 //   Empty front-half => safe to fetch. mem_wb.valid is NOT
@@ -234,6 +235,27 @@ register_file u_register_file (
 // --------------------------------------------------------
 // ID / EX  register
 // --------------------------------------------------------
+// DATA HAZARD (RAW): forwarding
+// N:   addi x5, x0, 5
+// N+1: addi x6, x5, 3      // needs x5
+
+fwd_flag_t id_fwd_a_sel;
+fwd_flag_t id_fwd_b_sel;
+
+always_comb begin
+  id_fwd_a_sel = FWD_RF;
+  id_fwd_b_sel = FWD_RF;
+
+  if(id_ex.valid && id_ex.rf_wr_en && (id_ex.rd_addr != 0) && (id_ex.rd_addr == id_rs1_addr)) id_fwd_a_sel = FWD_EXMEM;
+
+  else if (ex_mem.valid && ex_mem.rf_wr_en && (ex_mem.rd_addr != 0) && (ex_mem.rd_addr == id_rs1_addr)) id_fwd_a_sel = FWD_MEMWB;
+
+  if(id_ex.valid && id_ex.rf_wr_en && (id_ex.rd_addr != 0) && (id_ex.rd_addr == id_rs2_addr)) id_fwd_b_sel = FWD_EXMEM;
+
+  else if (ex_mem.valid && ex_mem.rf_wr_en && (ex_mem.rd_addr != 0) && (ex_mem.rd_addr == id_rs2_addr)) id_fwd_b_sel = FWD_MEMWB;
+end
+
+
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) id_ex <= '0;
   else if (memory_stall) begin
@@ -261,6 +283,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     id_ex.dmem_zero_extend <= id_dmem_zero_extend;
     id_ex.rf_wr_en         <= id_rf_wr_en;
     id_ex.rf_wr_data_sel   <= id_rf_wr_data_sel;
+    id_ex.fwd_a_sel        <= id_fwd_a_sel;
+    id_ex.fwd_b_sel        <= id_fwd_b_sel;
   end
 end
 
@@ -276,18 +300,22 @@ end
 assign load_use_stall = id_ex.valid && id_ex.dmem_req && !id_ex.dmem_wr_en // id_ex is a load
                         && (id_ex.rd_addr == id_rs1_addr || id_ex.rd_addr == id_rs2_addr) 
                         && (id_ex.rd_addr != 0);
-// DATA HAZARD (RAW): forwarding
-// N:   addi x5, x0, 5
-// N+1: addi x6, x5, 3      // needs x5
-assign forward_a_from_ex_mem = ex_mem.valid && ex_mem.rf_wr_en && (ex_mem.rd_addr != 0) && (ex_mem.rd_addr == id_ex.rs1_addr);
-assign forward_b_from_ex_mem = ex_mem.valid && ex_mem.rf_wr_en && (ex_mem.rd_addr != 0) && (ex_mem.rd_addr == id_ex.rs2_addr);
 
-assign forward_a_from_mem_wb = mem_wb.valid && mem_wb.rf_wr_en && (mem_wb.rd_addr != 0) && (mem_wb.rd_addr == id_ex.rs1_addr) && !forward_a_from_ex_mem;
-
-assign forward_b_from_mem_wb = mem_wb.valid && mem_wb.rf_wr_en && (mem_wb.rd_addr != 0) && (mem_wb.rd_addr == id_ex.rs2_addr) && !forward_b_from_ex_mem;
-
-assign rs1_data_resolved = forward_a_from_ex_mem ? ex_mem.alu_res : forward_a_from_mem_wb ? wb_data : id_ex.rs1_data;
-assign rs2_data_resolved = forward_b_from_ex_mem ? ex_mem.alu_res : forward_b_from_mem_wb ? wb_data : id_ex.rs2_data;
+always_comb begin
+  case (id_ex.fwd_a_sel)
+    FWD_RF:    rs1_data_resolved = id_ex.rs1_data;
+    FWD_EXMEM: rs1_data_resolved = ex_mem.forward_data;
+    FWD_MEMWB: rs1_data_resolved = wb_data;
+    default:   rs1_data_resolved = id_ex.rs1_data;
+  endcase
+  
+  case (id_ex.fwd_b_sel)
+    FWD_RF:    rs2_data_resolved = id_ex.rs2_data;
+    FWD_EXMEM: rs2_data_resolved = ex_mem.forward_data;
+    FWD_MEMWB: rs2_data_resolved = wb_data;
+    default:   rs2_data_resolved = id_ex.rs2_data;
+  endcase
+end
 
 assign ex_alu_a = id_ex.op1_sel ? id_ex.pc        : rs1_data_resolved;
 assign ex_alu_b = id_ex.op2_sel ? id_ex.immediate : rs2_data_resolved;
@@ -314,6 +342,16 @@ assign ex_next_seq_pc   = id_ex.pc + 32'd4;
 // --------------------------------------------------------
 // EX / MEM  register
 // --------------------------------------------------------
+
+always_comb begin
+  unique case (id_ex.rf_wr_data_sel)
+    WB_SRC_ALU: ex_mem_forward_data = ex_alu_res;
+    WB_SRC_IMM: ex_mem_forward_data = id_ex.immediate;
+    WB_SRC_PC:  ex_mem_forward_data = ex_next_seq_pc;
+    default:    ex_mem_forward_data = 32'h0;
+  endcase
+end
+
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) ex_mem <= '0;
   else if (memory_stall) begin
@@ -335,6 +373,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     ex_mem.dmem_zero_extend <= id_ex.dmem_zero_extend;
     ex_mem.rf_wr_en         <= id_ex.rf_wr_en;
     ex_mem.rf_wr_data_sel   <= id_ex.rf_wr_data_sel;
+    ex_mem.forward_data     <= ex_mem_forward_data;
   end
 end
 

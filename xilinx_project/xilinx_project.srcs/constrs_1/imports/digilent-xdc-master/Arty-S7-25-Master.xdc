@@ -5,9 +5,9 @@
 
 ## Clock Signals
 set_property -dict { PACKAGE_PIN F14   IOSTANDARD LVCMOS33 } [get_ports { clk_12mhz }]; #IO_L13P_T2_MRCC_15 Sch=uclk
-create_clock -add -name sys_clk_pin -period 83.333 -waveform {0 41.667} [get_ports { clk_12mhz }];
+create_clock -add -name clk_12mhz -period 83.333 -waveform {0 41.667} [get_ports { clk_12mhz }];
 set_property -dict { PACKAGE_PIN R2    IOSTANDARD SSTL135 } [get_ports { clk_100mhz }]; #IO_L12P_T1_MRCC_34 Sch=ddr3_clk[200]
-create_clock -add -name sys_clk_pin -period 10.000 -waveform {0 5.000}  [get_ports { clk_100mhz }];
+create_clock -add -name clk_100mhz -period 10.000 -waveform {0 5.000}  [get_ports { clk_100mhz }];
 
 ## Switches
 #set_property -dict { PACKAGE_PIN H14   IOSTANDARD LVCMOS33 } [get_ports { sw[0] }]; #IO_L20N_T3_A19_15 Sch=sw[0]

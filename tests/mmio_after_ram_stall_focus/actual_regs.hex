@@ -1,5 +1,5 @@
 // memory data file (do not edit the following line - required for mem load use)
-// instance=/test_bench/dut/u_cpu/u_register_file/regs
+// instance=/test_bench_data_memory/dut/u_cpu/u_register_file/regs
 // format=hex addressradix=h dataradix=h version=1.0 wordsperline=1 noaddress
 00000000
 10000000
