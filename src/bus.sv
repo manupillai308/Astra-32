@@ -11,6 +11,8 @@ module bus #(
 )(
   input  logic                 clk,
   input  logic                 reset_n,
+  input  logic                 ui_clk,
+  input  logic                 ui_reset_n,
 
   input  logic                 cpu_dmem_req,
   input  logic                 cpu_dmem_wr_en,
@@ -196,8 +198,10 @@ always_comb begin
 end
 
 ddr_memory u_ddr_memory (
-  .clk                   (clk),
-  .reset_n               (reset_n),
+  .cpu_clk               (clk),
+  .cpu_reset_n           (reset_n),
+  .ui_clk                (ui_clk),
+  .ui_reset_n            (ui_reset_n),
   .dmem_req              (ram_req),
   .dmem_wr_en            (bus_wr_en),
   .dmem_data_size        (bus_data_size),

@@ -7,13 +7,13 @@ module test_bench();
   //   Tests report completion through LED MMIO:
   //     1 = pass
   //     2 = fail
-  //   MAX_CYCLES counts MIG ui_clk cycles.
+  //   MAX_CYCLES counts CPU clock cycles.
   // ----------------------------------------------------------------
   parameter int MAX_CYCLES = 1_000_000;
   localparam int LED_WIDTH = 3;
   localparam logic [LED_WIDTH-1:0] TEST_PASS_LED = 3'h1;
   localparam logic [LED_WIDTH-1:0] TEST_FAIL_LED = 3'h2;
-  localparam int CLK_HZ = 162_500_000;
+  localparam int CLK_HZ = 100_000_000;
   localparam int UART_BAUD = 115_200;
   localparam int UART_CLKS_PER_BIT = CLK_HZ / UART_BAUD;
   localparam int UART_MAX_CAPTURED_BYTES = 256;
@@ -45,7 +45,7 @@ module test_bench();
   wire [1:0]  ddr3_dm;
   wire [0:0]  ddr3_odt;
 
-  wire soc_clk = dut.ui_clk;
+  wire soc_clk = clk_100mhz;
   wire soc_reset_n = dut.soc_reset_n;
 
   typedef enum logic [1:0] {

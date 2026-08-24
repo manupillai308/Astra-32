@@ -13,6 +13,8 @@ module top #(
 )(
   input  logic                 clk,
   input  logic                 reset_n,
+  input  logic                 ui_clk,
+  input  logic                 ui_reset_n,
   output logic [LED_WIDTH-1:0] mmio_led,
   input logic uart_rx,
   output logic uart_tx,
@@ -68,6 +70,8 @@ bus #(
 ) u_bus (
   .clk                  (clk),
   .reset_n              (reset_n),
+  .ui_clk               (ui_clk),
+  .ui_reset_n           (ui_reset_n),
   .cpu_dmem_req         (cpu_dmem_req),
   .cpu_dmem_wr_en       (cpu_dmem_wr_en),
   .cpu_dmem_data_size   (cpu_dmem_data_size),

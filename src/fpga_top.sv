@@ -1,6 +1,6 @@
 module fpga_top #(
   parameter HEARTBEAT_BIT = 23,
-  parameter int CLK_HZ = 162_500_000,
+  parameter int CLK_HZ = 100_000_000,
   parameter int UART_BAUD = 115_200
 )(
   input  wire        clk_100mhz,
@@ -68,9 +68,10 @@ assign mig_sys_rst_n = ref_locked_sync[1];
 wire        ui_clk;
 wire        ui_clk_sync_rst;
 wire        init_calib_complete;
-logic       soc_reset_request;
 logic [1:0] soc_reset_sync;
 logic       soc_reset_n;
+logic [1:0] calib_complete_sync;
+logic       ui_reset_n;
 
 
 // Command interface
@@ -103,16 +104,26 @@ wire         app_zq_ack;
 
 wire [11:0]  device_temp;
 
-always_ff @(posedge ui_clk) begin
-  if (ui_clk_sync_rst || !init_calib_complete)
+assign ui_reset_n = !ui_clk_sync_rst && init_calib_complete;
+
+always_ff @(posedge clk_100mhz or negedge reset_n) begin
+  if (!reset_n) begin
+    calib_complete_sync <= 2'b00;
     soc_reset_sync <= 2'b00;
-  else
-    soc_reset_sync <= {soc_reset_sync[0], 1'b1};
+  end else begin
+    calib_complete_sync <= {calib_complete_sync[0], init_calib_complete};
+
+    if (!calib_complete_sync[1]) begin
+      soc_reset_sync <= 2'b00;
+    end else begin
+      soc_reset_sync <= {soc_reset_sync[0], 1'b1};
+    end
+  end
 end
 
 assign soc_reset_n = soc_reset_sync[1];
 
-always_ff @(posedge ui_clk) begin
+always_ff @(posedge clk_100mhz) begin
   if (!soc_reset_n) heartbeat_counter <= '0;
   else              heartbeat_counter <= heartbeat_counter + 1'b1;
 end
@@ -223,8 +234,10 @@ top #(
   .CLK_HZ (CLK_HZ),
   .UART_BAUD(UART_BAUD)
 ) u_top (
-  .clk      (ui_clk),
+  .clk      (clk_100mhz),
   .reset_n  (soc_reset_n),
+  .ui_clk   (ui_clk),
+  .ui_reset_n (ui_reset_n),
   .mmio_led (mmio_led),
   .uart_rx (uart_rx),
   .uart_tx (uart_tx),
