@@ -2,7 +2,111 @@
 ## To use it in a project:
 ## - uncomment the lines corresponding to used pins
 ## - rename the used ports (in each line, after get_ports) according to the top level signal names in the project
+# ============================================================
+# DDR bridge CDC constraints
+#
+# CPU clock : clk_100mhz
+# MIG UI    : clk_pll_i
+#
+# ddr_memory uses a bundled-data toggle handshake:
+#
+# CPU -> UI:
+#   req_*_cpu is registered and held stable
+#   req_toggle_cpu crosses through a 2-FF synchronizer
+#   UI captures req_*_cpu only after detecting the toggle
+#
+# UI -> CPU:
+#   resp_data_ui is registered and held stable
+#   resp_toggle_ui crosses through a 2-FF synchronizer
+#   CPU captures resp_data_ui only after detecting the toggle
+# ============================================================
 
+
+# ------------------------------------------------------------
+# 1. CPU -> UI request toggle
+#
+# Only the ASYNCHRONOUS input into synchronizer stage 0 is
+# false-pathed.
+#
+# sync_ui[0] -> sync_ui[1] remains normally timed by clk_pll_i.
+# ------------------------------------------------------------
+
+set req_toggle_sync0_d [get_pins -hier -regexp \
+    {.*u_ddr_memory/req_toggle_sync_ui_reg\[0\]/D$}]
+
+set_false_path -to $req_toggle_sync0_d
+
+
+# ------------------------------------------------------------
+# 2. UI -> CPU response toggle
+#
+# Only asynchronous input into synchronizer stage 0 is
+# false-pathed.
+#
+# sync_cpu[0] -> sync_cpu[1] remains normally timed by
+# clk_100mhz.
+# ------------------------------------------------------------
+
+set resp_toggle_sync0_d [get_pins -hier -regexp \
+    {.*u_ddr_memory/resp_toggle_sync_cpu_reg\[0\]/D$}]
+
+set_false_path -to $resp_toggle_sync0_d
+
+
+# ------------------------------------------------------------
+# 3. CPU -> UI bundled request payload
+#
+# These registers are held stable while req_toggle propagates
+# through its synchronizer.
+#
+# Do NOT time them using the asynchronous clock phase
+# relationship. Instead, constrain physical datapath delay.
+# ------------------------------------------------------------
+
+set req_payload_cpu [get_cells -hier -regexp \
+    {.*u_ddr_memory/req_(data_size|addr|wr_data|zero_extend|wr_en)_cpu_reg.*}]
+
+set req_payload_ui [get_cells -hier -regexp \
+    {.*u_ddr_memory/req_(data_size|addr|wr_data|zero_extend|wr_en)_ui_reg.*}]
+
+set_max_delay -datapath_only 10.000 \
+    -from $req_payload_cpu \
+    -to   $req_payload_ui
+
+
+# Normal asynchronous hold analysis is not meaningful for this
+# bundled-data crossing.
+set_false_path -hold \
+    -from $req_payload_cpu \
+    -to   $req_payload_ui
+
+
+# ------------------------------------------------------------
+# 4. UI -> CPU bundled response payload
+#
+# resp_data_ui is held stable while resp_toggle_ui propagates
+# through its CPU-side synchronizer.
+# ------------------------------------------------------------
+
+set resp_payload_ui [get_cells -hier -regexp \
+    {.*u_ddr_memory/resp_data_ui_reg.*}]
+
+set resp_payload_cpu [get_cells -hier -regexp \
+    {.*u_ddr_memory/rd_data_cpu_reg.*}]
+
+set_max_delay -datapath_only 10.000 \
+    -from $resp_payload_ui \
+    -to   $resp_payload_cpu
+
+set_false_path -hold \
+    -from $resp_payload_ui \
+    -to   $resp_payload_cpu
+
+set_false_path \
+    -to [get_pins -hierarchical -regexp \
+        {.*calib_complete_sync_reg\[0\]/D$}]
+        
+set_false_path -from [get_clocks clk_out1_clk_wiz_0] -to [get_clocks clk_pll_i];
 ## Clock Signals
 set_property -dict { PACKAGE_PIN F14   IOSTANDARD LVCMOS33 } [get_ports { clk_12mhz }]; #IO_L13P_T2_MRCC_15 Sch=uclk
 create_clock -add -name clk_12mhz -period 83.333 -waveform {0 41.667} [get_ports { clk_12mhz }];
