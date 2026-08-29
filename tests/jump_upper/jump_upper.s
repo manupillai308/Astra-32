@@ -1,35 +1,43 @@
-# ------------------------------------------------------------
-# jump_upper.s - exercise LUI/AUIPC/JAL/JALR paths
-#
-# x10 remains zero unless a jump fails to skip its trap instruction.
-#
-# Expected:
-#   x1 = 0x12345000 from LUI
-#   x2 = 0x00000004 from AUIPC at PC 4 with imm 0
-#   x3 = 0x0000000c from JAL link at PC 8
-#   x4 = 0x0000001c from JALR link at PC 24
-#
-# Halt: DMEM[0x3C] <- 1
-# ------------------------------------------------------------
-
 .section .text
 .globl _start
 _start:
+    lui     x30, 0x10000
+
     lui     x1,  0x12345
     auipc   x2,  0
 
     jal     x3,  after_jal
-    addi    x10, x0, 1
+    jal     x0,  fail
 after_jal:
     addi    x11, x0, 1
 
-    addi    x5,  x0, 0x20        # jalr_target address
+    addi    x5,  x0, 0x24
     jalr    x4,  0(x5)
-    addi    x10, x0, 2
+    jal     x0,  fail
 jalr_target:
     addi    x12, x0, 1
 
-    addi    x31, x0, 1
-    sw      x31, 0x3C(x0)
+    lui     x6,  0x12345
+    bne     x1,  x6, fail
+    addi    x6,  x0, 8
+    bne     x2,  x6, fail
+    addi    x6,  x0, 16
+    bne     x3,  x6, fail
+    addi    x6,  x0, 32
+    bne     x4,  x6, fail
+    addi    x6,  x0, 1
+    bne     x11, x6, fail
+    bne     x12, x6, fail
+    jal     x0,  pass
+
+pass:
+    addi    x1,  x0, 1
+    sw      x1,  0(x30)
+    jal     x0,  hang
+
+fail:
+    addi    x1,  x0, 2
+    sw      x1,  0(x30)
+
 hang:
     jal     x0,  hang

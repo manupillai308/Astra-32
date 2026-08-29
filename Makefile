@@ -4,11 +4,8 @@
 # Usage:
 #   make build               compile RTL into Questa work library
 #   make asm                 assemble all tests/*/*.s -> .mem
-#   make run TEST=fibonacci  run one test, leaves actual_*.hex
-#   make capture TEST=...    run + freeze actual as expected (golden)
-#   make capture-all         run + freeze every test as expected
-#   make test                run every test, diff against golden,
-#                            print pass/fail summary
+#   make run TEST=fibonacci  run one LED self-checking test
+#   make test                run every LED self-checking test
 #   make clean               remove build artefacts
 # ============================================================
 
@@ -23,6 +20,7 @@ ASFLAGS  := -march=rv32i -mabi=ilp32
 LDFLAGS  := -m elf32lriscv -T tests/link.ld
 
 VSIM     := vsim -c -voptargs="+acc" -do "run -all; quit"
+SIM_TOP  := work.test_bench
 
 # ---- Sources -----------------------------------------------------
 SRC      := $(wildcard src/*.sv)
@@ -63,78 +61,30 @@ run: build
 	  echo "Usage: make run TEST=<name>  (one of: $(TESTS))"; exit 1; \
 	fi
 	@$(MAKE) -s tests/$(TEST)/$(TEST).mem
-	@rm -f tests/$(TEST)/actual_*.hex tests/$(TEST)/sim.log
-	@$(VSIM) +PROGRAM=tests/$(TEST)/$(TEST).mem \
-	         +OUTDIR=tests/$(TEST) \
-	         work.test_bench_data_memory
-
-# ---- Capture: run then freeze actual_* as expected_* -------------
-.PHONY: capture
-capture: run
-	@actuals=(tests/$(TEST)/actual_*.hex); \
-	if [ "$${actuals[0]}" = "tests/$(TEST)/actual_*.hex" ]; then \
-	  echo "[FAIL] no actual files produced for $(TEST)"; exit 1; \
-	fi; \
-	for actual in "$${actuals[@]}"; do \
-	  expected=$${actual/actual_/expected_}; \
-	  cp "$$actual" "$$expected"; \
-	done
-	@echo "[CAPTURED] $(TEST)"
-
-.PHONY: capture-all
-capture-all:
-	@for t in $(TESTS); do \
-	  $(MAKE) -s capture TEST=$$t || exit $$?; \
-	done
+	@rm -f tests/$(TEST)/sim.log
+	@$(VSIM) +PROGRAM=tests/$(TEST)/$(TEST).mem $(SIM_TOP)
 
 # ---- Full regression ---------------------------------------------
-# Runs every test, diffs against golden, prints pass/fail summary.
+# Runs every LED self-checking test and prints pass/fail summary.
 # Exits non-zero if any test fails (so CI can pick it up later).
 .PHONY: test
 test: build asm
 	@pass=0; fail=0; failed=""; \
 	for t in $(TESTS); do \
-	  rm -f tests/$$t/actual_*.hex tests/$$t/sim.log; \
-	  $(VSIM) +PROGRAM=tests/$$t/$$t.mem \
-	          +OUTDIR=tests/$$t \
-	          work.test_bench_data_memory > tests/$$t/sim.log 2>&1; \
+	  rm -f tests/$$t/sim.log; \
+	  $(VSIM) +PROGRAM=tests/$$t/$$t.mem $(SIM_TOP) > tests/$$t/sim.log 2>&1; \
 	  sim_status=$$?; \
-	  ok=1; actual_count=0; \
+	  ok=1; \
 	  if [ $$sim_status -ne 0 ]; then \
 	    ok=0; \
 	  fi; \
-	  for actual in tests/$$t/actual_*.hex; do \
-	    if [ "$$actual" = "tests/$$t/actual_*.hex" ]; then \
-	      break; \
-	    fi; \
-	    actual_count=$$((actual_count+1)); \
-	    expected=$${actual/actual_/expected_}; \
-	    if [ ! -f "$$expected" ]; then \
-	      echo "[MISSING] $$expected"; \
-	      ok=0; \
-	    elif ! diff -I '^//' -q "$$actual" "$$expected" >/dev/null 2>&1; then \
-	      echo "[DIFF] $$actual $$expected"; \
-	      ok=0; \
-	    fi; \
-	  done; \
-	  for expected in tests/$$t/expected_*.hex; do \
-	    if [ "$$expected" = "tests/$$t/expected_*.hex" ]; then \
-	      break; \
-	    fi; \
-	    actual=$${expected/expected_/actual_}; \
-	    if [ ! -f "$$actual" ]; then \
-	      echo "[MISSING] $$actual"; \
-	      ok=0; \
-	    fi; \
-	  done; \
-	  if [ $$actual_count -eq 0 ]; then \
-	    echo "[MISSING] tests/$$t/actual_*.hex"; \
+	  if ! grep -q "\\[PASS\\]" tests/$$t/sim.log; then \
 	    ok=0; \
 	  fi; \
 	  if [ $$ok -eq 1 ]; then \
 	    echo "[PASS] $$t"; pass=$$((pass+1)); \
 	  else \
-	    echo "[FAIL] $$t  (see tests/$$t/sim.log; diff actual vs expected)"; \
+	    echo "[FAIL] $$t  (see tests/$$t/sim.log)"; \
 	    fail=$$((fail+1)); failed="$$failed $$t"; \
 	  fi; \
 	done; \
@@ -146,7 +96,7 @@ test: build asm
 .PHONY: clean
 clean:
 	rm -rf work transcript vsim.wlf
-	rm -f  tests/*/actual_*.hex tests/*/sim.log
+	rm -f  tests/*/sim.log
 	rm -f  tests/*/*.o tests/*/*.elf tests/*/*.bin
 	# .mem files are kept; remove with `make distclean` if desired
 

@@ -1,5 +1,5 @@
 module instruction_memory #(
-    parameter ADDR_WIDTH = 7, // address bits
+    parameter ADDR_WIDTH = 12, // address bits
     parameter DATA_WIDTH = 8 // data width per memory cell
 )(
     input  logic        clk,

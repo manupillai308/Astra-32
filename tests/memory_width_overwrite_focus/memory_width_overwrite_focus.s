@@ -1,30 +1,33 @@
-# ------------------------------------------------------------
-# memory_width_overwrite_focus.s - byte/half overwrite lanes
-#
-# Expected final word:
-#   start: 0xffffffff
-#   sb @1: 0xffff12ff
-#   sh @2: 0x003412ff
-#
-# Halt: DMEM[0x3C] <- 1
-# ------------------------------------------------------------
-
 .section .text
 .globl _start
 _start:
+    lui     x29, 0x80000
+    lui     x30, 0x10000
+
     addi    x1,  x0, -1
-    sw      x1,  0(x0)
+    sw      x1,  0(x29)
 
     addi    x2,  x0, 0x12
-    sb      x2,  1(x0)
+    sb      x2,  1(x29)
 
     addi    x3,  x0, 0x34
-    sh      x3,  2(x0)
+    sh      x3,  2(x29)
 
-    lw      x4,  0(x0)
+    lw      x4,  0(x29)
 
-    addi    x31, x0, 1
-    sw      x31, 0x3C(x0)
+    lui     x5,  0x00341
+    addi    x5,  x5, 0x2ff
+    bne     x4,  x5, fail
+    jal     x0,  pass
+
+pass:
+    addi    x1,  x0, 1
+    sw      x1,  0(x30)
+    jal     x0, hang
+
+fail:
+    addi    x1,  x0, 2
+    sw      x1,  0(x30)
 
 hang:
     jal     x0, hang

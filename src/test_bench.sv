@@ -123,19 +123,16 @@ module test_bench();
 
     if (soc_reset_n && mmio_led == TEST_PASS_LED) begin
       $display("[PASS] pass LED detected at cycle %0d", cycle_count);
-      dump_state();
       $finish;
     end
 
     if (soc_reset_n && mmio_led == TEST_FAIL_LED) begin
       $display("[FAIL] fail LED detected at cycle %0d", cycle_count);
-      dump_state();
       $finish;
     end
 
     if (cycle_count >= MAX_CYCLES) begin
       $display("[FAIL] timeout after %0d cycles", MAX_CYCLES);
-      dump_state();
       $finish;
     end
   end
@@ -194,33 +191,6 @@ module test_bench();
       endcase
     end
   end
-
-  task dump_state;
-    string outdir;
-    integer led_file;
-    integer uart_file;
-    integer i;
-    if (!$value$plusargs("OUTDIR=%s", outdir)) outdir = ".";
-    $writememh({outdir, "/actual_regs.hex"}, dut.u_top.u_cpu.u_register_file.regs);
-
-    led_file = $fopen({outdir, "/actual_led.hex"}, "w");
-    if (led_file) begin
-      $fdisplay(led_file, "%0h", mmio_led);
-      $fclose(led_file);
-    end else begin
-      $display("[WARN] could not open %s", {outdir, "/actual_led.hex"});
-    end
-
-    uart_file = $fopen({outdir, "/actual_uart_tx.hex"}, "w");
-    if (uart_file) begin
-      for (i = 0; i < uart_tx_count; i = i + 1) begin
-        $fdisplay(uart_file, "%02h", uart_tx_bytes[i]);
-      end
-      $fclose(uart_file);
-    end else begin
-      $display("[WARN] could not open %s", {outdir, "/actual_uart_tx.hex"});
-    end
-  endtask
 
   initial begin
     clk_100mhz = 0;

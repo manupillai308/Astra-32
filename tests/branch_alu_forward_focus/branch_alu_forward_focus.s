@@ -1,35 +1,30 @@
-# ------------------------------------------------------------
-# branch_alu_forward_focus.s - ALU results consumed by branch
-#
-# Expected:
-#   DMEM[0] = 1
-#   DMEM[4] = 3
-#
-# Halt: DMEM[0x3C] <- 1
-# ------------------------------------------------------------
-
 .section .text
 .globl _start
 _start:
+    lui     x30, 0x10000
+
     addi    x1,  x0, 5
     addi    x2,  x1, 0
     bge     x2,  x1, branch_taken
-
-wrong_path:
-    addi    x3,  x0, 2
-    sw      x3,  0(x0)
-    jal     x0,  after_branch
+    jal     x0,  fail
 
 branch_taken:
     addi    x3,  x0, 1
-    sw      x3,  0(x0)
-
-after_branch:
     addi    x4,  x0, 3
-    sw      x4,  4(x0)
+    addi    x5,  x0, 1
+    bne     x3,  x5, fail
+    addi    x5,  x0, 3
+    bne     x4,  x5, fail
+    jal     x0,  pass
 
-    addi    x31, x0, 1
-    sw      x31, 0x3C(x0)
+pass:
+    addi    x1,  x0, 1
+    sw      x1,  0(x30)
+    jal     x0,  hang
+
+fail:
+    addi    x1,  x0, 2
+    sw      x1,  0(x30)
 
 hang:
     jal     x0, hang

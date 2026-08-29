@@ -1,27 +1,31 @@
-# ------------------------------------------------------------
-# store_load_same_addr_focus.s - store followed by load same address
-#
-# Expected:
-#   x2 = 21
-#   x4 = 33
-#   DMEM[0] = 33
-#
-# Halt: DMEM[0x3C] <- 1
-# ------------------------------------------------------------
-
 .section .text
 .globl _start
 _start:
+    lui     x29, 0x80000
+    lui     x30, 0x10000
+
     addi    x1,  x0, 21
-    sw      x1,  0(x0)
-    lw      x2,  0(x0)
+    sw      x1,  0(x29)
+    lw      x2,  0(x29)
 
     addi    x3,  x0, 33
-    sw      x3,  0(x0)
-    lw      x4,  0(x0)
+    sw      x3,  0(x29)
+    lw      x4,  0(x29)
 
-    addi    x31, x0, 1
-    sw      x31, 0x3C(x0)
+    addi    x5,  x0, 21
+    bne     x2,  x5, fail
+    addi    x5,  x0, 33
+    bne     x4,  x5, fail
+    jal     x0,  pass
+
+pass:
+    addi    x1,  x0, 1
+    sw      x1,  0(x30)
+    jal     x0, hang
+
+fail:
+    addi    x1,  x0, 2
+    sw      x1,  0(x30)
 
 hang:
     jal     x0, hang

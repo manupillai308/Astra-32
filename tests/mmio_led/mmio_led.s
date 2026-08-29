@@ -1,12 +1,21 @@
 .section .text
 .globl _start
 _start:
-    lui  x1, 0x10000
-    addi x2, x0, 5
-    sw   x2, 0(x1)
+    lui     x30, 0x10000
 
-    addi x3, x0, 1
-    sw   x3, 0x3C(x0)
+    addi    x1,  x0, 5
+    sw      x1,  0(x30)
 
-    hang:
-        jal x0, hang
+    jal     x0,  pass
+
+pass:
+    addi    x1,  x0, 1
+    sw      x1,  0(x30)
+    jal     x0,  hang
+
+fail:
+    addi    x1,  x0, 2
+    sw      x1,  0(x30)
+
+hang:
+    jal     x0, hang

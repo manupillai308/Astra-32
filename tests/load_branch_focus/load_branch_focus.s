@@ -1,38 +1,27 @@
-# ------------------------------------------------------------
-# load_branch_focus.s - isolate load result forwarding into branch
-#
-# arr[0] = 5, arr[1] = 2
-# bge x18, x17 should NOT be taken because 2 < 5.
-#
-# Correct path: DMEM[8] = 1
-# Wrong path:   DMEM[8] = 2
-#
-# Halt: DMEM[0x3C] <- 1
-# ------------------------------------------------------------
-
 .section .text
 .globl _start
 _start:
+    lui     x29, 0x80000
+    lui     x30, 0x10000
+
     addi    x1,  x0, 5
-    sw      x1,  0(x0)
+    sw      x1,  0(x29)
     addi    x1,  x0, 2
-    sw      x1,  4(x0)
+    sw      x1,  4(x29)
 
-    lw      x17, 0(x0)
-    lw      x18, 4(x0)
-    bge     x18, x17, wrong_path
+    lw      x17, 0(x29)
+    lw      x18, 4(x29)
+    bge     x18, x17, fail
+    jal     x0,  pass
 
-    addi    x2,  x0, 1
-    sw      x2,  8(x0)
-    jal     x0,  done
+pass:
+    addi    x1,  x0, 1
+    sw      x1,  0(x30)
+    jal     x0,  hang
 
-wrong_path:
-    addi    x2,  x0, 2
-    sw      x2,  8(x0)
-
-done:
-    addi    x31, x0, 1
-    sw      x31, 0x3C(x0)
+fail:
+    addi    x1,  x0, 2
+    sw      x1,  0(x30)
 
 hang:
     jal     x0,  hang

@@ -1,33 +1,30 @@
-# ------------------------------------------------------------
-# load_to_jalr_focus.s - load result used as JALR base
-#
-# Expected:
-#   DMEM[4] = 1
-#   x3 = return PC from jalr
-#
-# Halt: DMEM[0x3C] <- 1
-# ------------------------------------------------------------
-
 .section .text
 .globl _start
 _start:
-    addi    x1,  x0, 0x1C        # target address
-    sw      x1,  0(x0)
-    lw      x2,  0(x0)
-    jalr    x3,  0(x2)
+    lui     x29, 0x80000
+    lui     x30, 0x10000
 
-wrong_path:
-    addi    x4,  x0, 2
-    sw      x4,  4(x0)
-    jal     x0,  done
+    lui     x1,  %hi(target)
+    addi    x1,  x1, %lo(target)
+    sw      x1,  0(x29)
+    lw      x2,  0(x29)
+    jalr    x3,  0(x2)
+    jal     x0,  fail
 
 target:
     addi    x4,  x0, 1
-    sw      x4,  4(x0)
+    addi    x5,  x0, 1
+    bne     x4,  x5, fail
+    jal     x0,  pass
 
-done:
-    addi    x31, x0, 1
-    sw      x31, 0x3C(x0)
+pass:
+    addi    x1,  x0, 1
+    sw      x1,  0(x30)
+    jal     x0,  hang
+
+fail:
+    addi    x1,  x0, 2
+    sw      x1,  0(x30)
 
 hang:
     jal     x0, hang
