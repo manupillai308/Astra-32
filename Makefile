@@ -20,7 +20,7 @@ ASFLAGS  := -march=rv32i -mabi=ilp32
 LDFLAGS  := -m elf32lriscv -T tests/link.ld
 
 VSIM     := vsim -c -voptargs="+acc" -do "run -all; quit"
-SIM_TOP  := work.test_bench
+SIM_TOP  := work.test_bench_data_memory
 
 # ---- Sources -----------------------------------------------------
 SRC      := $(wildcard src/*.sv)

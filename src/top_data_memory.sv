@@ -2,6 +2,7 @@ import risc_pkg::*;
 
 module top_data_memory #(
   parameter RESET_PC = 32'h0000,
+  parameter logic [31:0] RAM_BASE_ADDR = 32'h8000_0000,
   parameter RAM_ADDR_WIDTH = 10,
   parameter LED_WIDTH = 3,
   parameter LED_BASE_ADDR = 32'h1000_0000,
@@ -42,6 +43,7 @@ cpu #(
 );
 
 bus_data_memory #(
+  .RAM_BASE_ADDR     (RAM_BASE_ADDR),
   .RAM_ADDR_WIDTH    (RAM_ADDR_WIDTH),
   .LED_WIDTH         (LED_WIDTH),
   .LED_BASE_ADDR     (LED_BASE_ADDR),

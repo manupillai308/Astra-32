@@ -1,6 +1,7 @@
 import risc_pkg::*;
 
 module bus_data_memory #(
+  parameter logic [31:0] RAM_BASE_ADDR = 32'h8000_0000,
   parameter RAM_ADDR_WIDTH = 6,
   parameter LED_WIDTH = 3,
   parameter LED_BASE_ADDR = 32'h1000_0000,
@@ -41,6 +42,7 @@ logic accept_txn;
 logic [31:0] ram_rd_data;
 logic [31:0] led_rd_data;
 logic [31:0] uart_rd_data;
+logic [31:0] ram_offset_addr;
 
 typedef enum logic [1:0] {
   BUS_TARGET_NONE = 2'b00,
@@ -69,18 +71,23 @@ logic        txn_zero_extend;
 logic        bus_wr_en;
 mem_size_t   bus_data_size;
 logic [31:0] bus_addr;
+logic [31:0] decoded_addr;
 logic [31:0] bus_wr_data;
 logic        bus_zero_extend;
 
-assign ram_sel = (cpu_dmem_addr[31:RAM_ADDR_WIDTH] == '0);
+localparam logic [31:0] RAM_SIZE_BYTES = 32'h1 << RAM_ADDR_WIDTH;
+
+assign ram_offset_addr = cpu_dmem_addr - RAM_BASE_ADDR;
+assign ram_sel = (cpu_dmem_addr >= RAM_BASE_ADDR) && (ram_offset_addr < RAM_SIZE_BYTES);
 assign led_sel = (cpu_dmem_addr == LED_BASE_ADDR);
 assign uart_sel = (cpu_dmem_addr[31:4] == UART_BASE_ADDR[31:4]);
 assign accept_txn = (bus_state_q == BUS_IDLE) && cpu_dmem_req;
 assign active_target = (bus_state_q == BUS_WAIT) ? read_target_q : decoded_target;
+assign decoded_addr = (decoded_target == BUS_TARGET_RAM) ? ram_offset_addr : cpu_dmem_addr;
 
 assign bus_wr_en = (bus_state_q == BUS_WAIT) ? txn_wr_en : cpu_dmem_wr_en;
 assign bus_data_size = (bus_state_q == BUS_WAIT) ? txn_data_size : cpu_dmem_data_size;
-assign bus_addr = (bus_state_q == BUS_WAIT) ? txn_addr : cpu_dmem_addr;
+assign bus_addr = (bus_state_q == BUS_WAIT) ? txn_addr : decoded_addr;
 assign bus_wr_data = (bus_state_q == BUS_WAIT) ? txn_wr_data : cpu_dmem_wr_data;
 assign bus_zero_extend = (bus_state_q == BUS_WAIT) ? txn_zero_extend : cpu_dmem_zero_extend;
 
@@ -135,7 +142,7 @@ always_ff @(posedge clk or negedge reset_n) begin
           read_target_q <= decoded_target;
           txn_wr_en <= cpu_dmem_wr_en;
           txn_data_size <= cpu_dmem_data_size;
-          txn_addr <= cpu_dmem_addr;
+          txn_addr <= decoded_addr;
           txn_wr_data <= cpu_dmem_wr_data;
           txn_zero_extend <= cpu_dmem_zero_extend;
 

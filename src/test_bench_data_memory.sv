@@ -2,15 +2,19 @@ module test_bench_data_memory();
 
   // ----------------------------------------------------------------
   // Harness parameters
-  //   HALT_ADDR : DMEM byte address the program writes to signal "done".
+  //   Tests report completion through LED MMIO:
+  //     1 = pass
+  //     2 = fail
   //   MAX_CYCLES: safety net so a buggy program can't loop forever.
   // ----------------------------------------------------------------
-  parameter int HALT_ADDR  = 60; // 0x3C
-  parameter int MAX_CYCLES = 10000;
+  parameter int MAX_CYCLES = 1_000_000;
   localparam int LED_WIDTH = 3;
+  localparam logic [LED_WIDTH-1:0] TEST_PASS_LED = 3'h1;
+  localparam logic [LED_WIDTH-1:0] TEST_FAIL_LED = 3'h2;
   localparam int RAM_ADDR_WIDTH = 12;
-  localparam int DMEM_BYTES = 2**RAM_ADDR_WIDTH;
-  localparam int UART_CLKS_PER_BIT = 12_000_000 / 115_200;
+  localparam int CLK_HZ = 100_000_000;
+  localparam int UART_BAUD = 115_200;
+  localparam int UART_CLKS_PER_BIT = CLK_HZ / UART_BAUD;
   localparam int UART_MAX_CAPTURED_BYTES = 256;
   parameter int RAM_STALL_CYCLES = 2;
 
@@ -38,8 +42,11 @@ module test_bench_data_memory();
 
   top_data_memory #(
     .RESET_PC(32'h0),
+    .RAM_BASE_ADDR(32'h8000_0000),
     .LED_WIDTH(LED_WIDTH),
     .RAM_ADDR_WIDTH(RAM_ADDR_WIDTH),
+    .CLK_HZ(CLK_HZ),
+    .UART_BAUD(UART_BAUD),
     .RAM_STALL_CYCLES(RAM_STALL_CYCLES)
   ) dut (
     .clk(clk),
@@ -49,30 +56,21 @@ module test_bench_data_memory();
     .uart_tx(uart_tx)
   );
 
-  function automatic logic [7:0] dmem_byte(input int unsigned byte_addr);
-    unique case (byte_addr[1:0])
-      2'b00: dmem_byte = dut.u_bus.u_data_memory.mem[byte_addr[31:2]][7:0];
-      2'b01: dmem_byte = dut.u_bus.u_data_memory.mem[byte_addr[31:2]][15:8];
-      2'b10: dmem_byte = dut.u_bus.u_data_memory.mem[byte_addr[31:2]][23:16];
-      default: dmem_byte = dut.u_bus.u_data_memory.mem[byte_addr[31:2]][31:24];
-    endcase
-  endfunction
-
   always @(posedge clk) begin
     cycle_count <= cycle_count + 1;
 
-    if (reset_n &&
-        dmem_byte(HALT_ADDR) !== 8'h00 &&
-        dmem_byte(HALT_ADDR) !== 8'hxx) begin
-      $display("[PASS] halt detected at cycle %0d (dmem[0x%0h]=0x%0h)",
-               cycle_count, HALT_ADDR, dmem_byte(HALT_ADDR));
-      dump_state();
+    if (reset_n && mmio_led == TEST_PASS_LED) begin
+      $display("[PASS] pass LED detected at cycle %0d", cycle_count);
+      $finish;
+    end
+
+    if (reset_n && mmio_led == TEST_FAIL_LED) begin
+      $display("[FAIL] fail LED detected at cycle %0d", cycle_count);
       $finish;
     end
 
     if (cycle_count >= MAX_CYCLES) begin
       $display("[FAIL] timeout after %0d cycles", MAX_CYCLES);
-      dump_state();
       $finish;
     end
   end
@@ -128,44 +126,6 @@ module test_bench_data_memory();
       endcase
     end
   end
-
-  task dump_state;
-    string outdir;
-    integer dmem_file;
-    integer led_file;
-    integer uart_file;
-    integer i;
-    if (!$value$plusargs("OUTDIR=%s", outdir)) outdir = ".";
-    $writememh({outdir, "/actual_regs.hex"}, dut.u_cpu.u_register_file.regs);
-
-    dmem_file = $fopen({outdir, "/actual_dmem.hex"}, "w");
-    if (dmem_file) begin
-      for (i = 0; i < DMEM_BYTES; i = i + 1) begin
-        $fdisplay(dmem_file, "%02h", dmem_byte(i));
-      end
-      $fclose(dmem_file);
-    end else begin
-      $display("[WARN] could not open %s", {outdir, "/actual_dmem.hex"});
-    end
-
-    led_file = $fopen({outdir, "/actual_led.hex"}, "w");
-    if (led_file) begin
-      $fdisplay(led_file, "%0h", mmio_led);
-      $fclose(led_file);
-    end else begin
-      $display("[WARN] could not open %s", {outdir, "/actual_led.hex"});
-    end
-
-    uart_file = $fopen({outdir, "/actual_uart_tx.hex"}, "w");
-    if (uart_file) begin
-      for (i = 0; i < uart_tx_count; i = i + 1) begin
-        $fdisplay(uart_file, "%02h", uart_tx_bytes[i]);
-      end
-      $fclose(uart_file);
-    end else begin
-      $display("[WARN] could not open %s", {outdir, "/actual_uart_tx.hex"});
-    end
-  endtask
 
   initial begin
     clk = 0;
