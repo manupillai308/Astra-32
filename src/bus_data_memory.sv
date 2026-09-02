@@ -3,7 +3,9 @@ import risc_pkg::*;
 module bus_data_memory #(
   parameter logic [31:0] RAM_BASE_ADDR = 32'h8000_0000,
   parameter RAM_ADDR_WIDTH = 6,
+  parameter ROM_ADDR_WIDTH = 12,
   parameter LED_WIDTH = 3,
+  parameter ROM_BASE_ADDR = 32'h0,
   parameter LED_BASE_ADDR = 32'h1000_0000,
   parameter UART_BASE_ADDR = 32'h1000_0010,
   parameter int CLK_HZ = 12_000_000,
@@ -12,6 +14,11 @@ module bus_data_memory #(
 )(
   input  logic                 clk,
   input  logic                 reset_n,
+
+  input  logic                 cpu_imem_req,
+  input  logic [31:0]          cpu_imem_addr,
+  output logic [31:0]          cpu_imem_data,
+  output logic                 cpu_imem_busy,
 
   input  logic                 cpu_dmem_req,
   input  logic                 cpu_dmem_wr_en,
@@ -43,6 +50,7 @@ logic [31:0] ram_rd_data;
 logic [31:0] led_rd_data;
 logic [31:0] uart_rd_data;
 logic [31:0] ram_offset_addr;
+logic [31:0] rom_offset_addr;
 
 typedef enum logic [1:0] {
   BUS_TARGET_NONE = 2'b00,
@@ -78,6 +86,7 @@ logic        bus_zero_extend;
 localparam logic [31:0] RAM_SIZE_BYTES = 32'h1 << RAM_ADDR_WIDTH;
 
 assign ram_offset_addr = cpu_dmem_addr - RAM_BASE_ADDR;
+assign rom_offset_addr = cpu_imem_addr - ROM_BASE_ADDR;
 assign ram_sel = (cpu_dmem_addr >= RAM_BASE_ADDR) && (ram_offset_addr < RAM_SIZE_BYTES);
 assign led_sel = (cpu_dmem_addr == LED_BASE_ADDR);
 assign uart_sel = (cpu_dmem_addr[31:4] == UART_BASE_ADDR[31:4]);
@@ -216,6 +225,17 @@ mmio_uart #(
   .busy(uart_busy),
   .uart_rx(uart_rx),
   .uart_tx(uart_tx)
+);
+
+assign cpu_imem_busy = 1'b0;
+
+instruction_memory #(
+  .ADDR_WIDTH(ROM_ADDR_WIDTH)
+) u_instruction_memory (
+  .clk       (clk),
+  .imem_req  (cpu_imem_req),
+  .imem_addr (rom_offset_addr),
+  .imem_data (cpu_imem_data)
 );
 
 endmodule

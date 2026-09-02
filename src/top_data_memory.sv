@@ -18,6 +18,11 @@ module top_data_memory #(
   output logic                 uart_tx
 );
 
+logic        cpu_imem_req;
+logic [31:0] cpu_imem_addr;
+logic [31:0] cpu_imem_data;
+logic        cpu_imem_busy;
+
 logic        cpu_dmem_req;
 logic        cpu_dmem_wr_en;
 mem_size_t   cpu_dmem_data_size;
@@ -32,6 +37,10 @@ cpu #(
 ) u_cpu (
   .clk              (clk),
   .reset_n          (reset_n),
+  .imem_req         (cpu_imem_req),
+  .imem_addr        (cpu_imem_addr),
+  .imem_data        (cpu_imem_data),
+  .imem_busy        (cpu_imem_busy),
   .dmem_req         (cpu_dmem_req),
   .dmem_wr_en       (cpu_dmem_wr_en),
   .dmem_data_size   (cpu_dmem_data_size),
@@ -54,6 +63,10 @@ bus_data_memory #(
 ) u_bus (
   .clk                  (clk),
   .reset_n              (reset_n),
+  .cpu_imem_req         (cpu_imem_req),
+  .cpu_imem_addr        (cpu_imem_addr),
+  .cpu_imem_data        (cpu_imem_data),
+  .cpu_imem_busy        (cpu_imem_busy),
   .cpu_dmem_req         (cpu_dmem_req),
   .cpu_dmem_wr_en       (cpu_dmem_wr_en),
   .cpu_dmem_data_size   (cpu_dmem_data_size),

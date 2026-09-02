@@ -24,6 +24,11 @@ module cpu #(
   input logic clk,
   input logic reset_n,
 
+  output logic        imem_req,
+  output logic [31:0] imem_addr,
+  input  logic [31:0] imem_data,
+  input  logic        imem_busy,
+
   output logic        dmem_req,
   output logic        dmem_wr_en,
   output mem_size_t   dmem_data_size,
@@ -45,10 +50,6 @@ logic        pipeline_stall;
 logic        branch_redirect;
 logic        redirect_fire;
 logic [31:0] redirect_target;
-
-logic        imem_req;
-logic [31:0] imem_addr;
-logic [31:0] imem_data;
 
 // IF/ID equivalent: pc piped one cycle to align with the
 // sync imem output reg, which acts as IF/ID.instruction.
@@ -115,7 +116,7 @@ logic [31:0] ex_mem_forward_data;
 // --------------------------------------------------------
 assign memory_stall = dmem_busy;
 assign pipeline_stall = load_use_stall || memory_stall;
-assign fetch_enable = !pipeline_stall;
+assign fetch_enable = !pipeline_stall && !imem_busy;
 
 // --------------------------------------------------------
 // Branch / jump redirect
@@ -160,16 +161,6 @@ always_ff @(posedge clk or negedge reset_n) begin
     if_id_pc    <= pc;
   end
 end
-
-// --------------------------------------------------------
-// IMEM
-// --------------------------------------------------------
-instruction_memory u_instruction_memory (
-  .clk       (clk),
-  .imem_req  (imem_req),
-  .imem_addr (imem_addr),
-  .imem_data (imem_data)
-);
 
 // --------------------------------------------------------
 // ID stage : decode + control + regfile read
