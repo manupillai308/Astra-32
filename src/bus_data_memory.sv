@@ -49,7 +49,6 @@ logic dmem_ram_accept;
 logic dmem_mmio_accept;
 logic ram_busy;
 logic uart_busy;
-logic ram_selected_busy;
 logic dmem_accept;
 
 logic [31:0] ram_rd_data;
@@ -73,7 +72,8 @@ typedef enum logic [2:0] {
 
 typedef enum logic [1:0] {
   RAM_IDLE = 2'b00,
-  RAM_WAIT = 2'b01,
+  RAM_ISSUE = 2'b01,
+  RAM_WAIT = 2'b10,
   RAM_DONE = 2'b11
 } ram_state_t;
 
@@ -86,8 +86,9 @@ typedef enum logic [1:0] {
 
 typedef enum logic [1:0] {
   ROM_IDLE = 2'b00,
-  ROM_WAIT = 2'b01,
-  ROM_DONE = 2'b10
+  ROM_ISSUE = 2'b01,
+  ROM_WAIT = 2'b10,
+  ROM_DONE = 2'b11
 } rom_state_t;
 
 typedef enum logic [1:0] {
@@ -99,7 +100,6 @@ typedef enum logic [1:0] {
 dmem_target_t read_target_q;
 dmem_target_t mmio_target_q;
 dmem_target_t dmem_target;
-dmem_target_t ram_active_target;
 ram_state_t ram_state_q;
 mmio_state_t mmio_state_q;
 rom_state_t rom_state_q;
@@ -157,14 +157,13 @@ assign dmem_ram_accept = dmem_accept && (dmem_target == DMEM_TARGET_RAM);
 assign dmem_mmio_accept = dmem_accept &&
                           (dmem_target != DMEM_TARGET_RAM) &&
                           (dmem_target != DMEM_TARGET_ROM);
-assign ram_active_target = (ram_state_q == RAM_WAIT) ? read_target_q : dmem_target;
 assign dmem_decoded_addr = (dmem_target == DMEM_TARGET_RAM) ? ram_offset_addr : cpu_dmem_addr;
 
-assign ram_wr_en = (ram_state_q == RAM_WAIT) ? ram_txn_wr_en_q : cpu_dmem_wr_en;
-assign ram_data_size = (ram_state_q == RAM_WAIT) ? ram_txn_data_size_q : cpu_dmem_data_size;
-assign ram_addr = (ram_state_q == RAM_WAIT) ? ram_txn_addr_q : dmem_decoded_addr;
-assign ram_wr_data = (ram_state_q == RAM_WAIT) ? ram_txn_wr_data_q : cpu_dmem_wr_data;
-assign ram_zero_extend = (ram_state_q == RAM_WAIT) ? ram_txn_zero_extend_q : cpu_dmem_zero_extend;
+assign ram_wr_en = ram_txn_wr_en_q;
+assign ram_data_size = ram_txn_data_size_q;
+assign ram_addr = ram_txn_addr_q;
+assign ram_wr_data = ram_txn_wr_data_q;
+assign ram_zero_extend = ram_txn_zero_extend_q;
 
 always_comb begin
   unique case (1'b1)
@@ -189,15 +188,6 @@ always_comb begin
   end
 end
 
-always_comb begin
-  unique case (ram_active_target)
-    DMEM_TARGET_RAM:  ram_selected_busy = ram_busy;
-    DMEM_TARGET_LED:  ram_selected_busy = 1'b0;
-    DMEM_TARGET_UART: ram_selected_busy = uart_busy;
-    default:          ram_selected_busy = 1'b0;
-  endcase
-end
-
 assign cpu_dmem_rd_data_valid = (ram_state_q == RAM_DONE) ||
                                 (mmio_state_q == MMIO_DONE) ||
                                 ((rom_state_q == ROM_DONE) &&
@@ -210,10 +200,10 @@ assign cpu_imem_rd_data_valid = (rom_state_q == ROM_DONE) &&
 assign cpu_imem_data = rom_rd_data;
 
 always_comb begin
-  ram_req = dmem_ram_accept;
+  ram_req = (ram_state_q == RAM_ISSUE);
   led_req = (mmio_state_q == MMIO_ISSUE) && (mmio_target_q == DMEM_TARGET_LED);
   uart_req = (mmio_state_q == MMIO_ISSUE) && (mmio_target_q == DMEM_TARGET_UART);
-  rom_req = (rom_state_q == ROM_WAIT) && !rom_wr_en_q;
+  rom_req = (rom_state_q == ROM_ISSUE) && !rom_wr_en_q;
 end
 
 always_ff @(posedge clk or negedge reset_n) begin
@@ -275,12 +265,16 @@ always_ff @(posedge clk or negedge reset_n) begin
           ram_txn_wr_data_q <= cpu_dmem_wr_data;
           ram_txn_zero_extend_q <= cpu_dmem_zero_extend;
 
-          ram_state_q <= RAM_WAIT;
+          ram_state_q <= RAM_ISSUE;
         end
       end
 
+      RAM_ISSUE: begin
+        ram_state_q <= RAM_WAIT;
+      end
+
       RAM_WAIT: begin
-        if (!ram_selected_busy) begin
+        if (!ram_busy) begin
           ram_state_q <= RAM_DONE;
         end
       end
@@ -299,7 +293,7 @@ always_ff @(posedge clk or negedge reset_n) begin
           rom_addr_q <= imem_rom_offset_addr;
           rom_zero_extend_q <= 1'b0;
           rom_rr_q <= 1'b1;
-          rom_state_q <= ROM_WAIT;
+          rom_state_q <= ROM_ISSUE;
         end else if (rom_selected_owner == ROM_OWNER_DMEM) begin
           rom_owner_q <= ROM_OWNER_DMEM;
           rom_wr_en_q <= cpu_dmem_wr_en;
@@ -307,8 +301,12 @@ always_ff @(posedge clk or negedge reset_n) begin
           rom_addr_q <= dmem_rom_offset_addr;
           rom_zero_extend_q <= cpu_dmem_zero_extend;
           rom_rr_q <= 1'b0;
-          rom_state_q <= cpu_dmem_wr_en ? ROM_DONE : ROM_WAIT;
+          rom_state_q <= cpu_dmem_wr_en ? ROM_DONE : ROM_ISSUE;
         end
+      end
+
+      ROM_ISSUE: begin
+        rom_state_q <= ROM_WAIT;
       end
 
       ROM_WAIT: begin
