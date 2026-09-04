@@ -21,7 +21,8 @@ module top_data_memory #(
 logic        cpu_imem_req;
 logic [31:0] cpu_imem_addr;
 logic [31:0] cpu_imem_data;
-logic        cpu_imem_busy;
+logic        cpu_imem_ready;
+logic        cpu_imem_rd_data_valid;
 
 logic        cpu_dmem_req;
 logic        cpu_dmem_wr_en;
@@ -41,7 +42,8 @@ cpu #(
   .imem_req         (cpu_imem_req),
   .imem_addr        (cpu_imem_addr),
   .imem_data        (cpu_imem_data),
-  .imem_busy        (cpu_imem_busy),
+  .imem_ready       (cpu_imem_ready),
+  .imem_rd_data_valid(cpu_imem_rd_data_valid),
   .dmem_req         (cpu_dmem_req),
   .dmem_wr_en       (cpu_dmem_wr_en),
   .dmem_data_size   (cpu_dmem_data_size),
@@ -68,7 +70,8 @@ bus_data_memory #(
   .cpu_imem_req         (cpu_imem_req),
   .cpu_imem_addr        (cpu_imem_addr),
   .cpu_imem_data        (cpu_imem_data),
-  .cpu_imem_busy        (cpu_imem_busy),
+  .cpu_imem_ready       (cpu_imem_ready),
+  .cpu_imem_rd_data_valid(cpu_imem_rd_data_valid),
   .cpu_dmem_req         (cpu_dmem_req),
   .cpu_dmem_wr_en       (cpu_dmem_wr_en),
   .cpu_dmem_data_size   (cpu_dmem_data_size),

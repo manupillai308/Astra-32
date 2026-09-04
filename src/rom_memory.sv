@@ -1,4 +1,4 @@
-module instruction_memory #(
+module rom_memory #(
     parameter ADDR_WIDTH = 12, // address bits
     parameter DATA_WIDTH = 8 // data width per memory cell
 )(

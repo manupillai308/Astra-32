@@ -27,7 +27,8 @@ module cpu #(
   output logic        imem_req,
   output logic [31:0] imem_addr,
   input  logic [31:0] imem_data,
-  input  logic        imem_busy,
+  input  logic        imem_ready,
+  input  logic        imem_rd_data_valid,
 
   output logic        dmem_req,
   output logic        dmem_wr_en,
@@ -45,6 +46,14 @@ module cpu #(
 // =====================================================
 logic [31:0] pc;
 logic        fetch_enable;
+logic        fetch_stall;
+logic        imem_fire;
+logic        imem_pending_q;
+logic        imem_inflight_q;
+logic        imem_done_q;
+logic [31:0] imem_req_pc_q;
+logic [31:0] imem_done_pc_q;
+logic [31:0] imem_done_data_q;
 logic        load_use_stall;
 logic        memory_stall;
 logic        pipeline_stall;
@@ -56,6 +65,7 @@ logic [31:0] redirect_target;
 // sync imem output reg, which acts as IF/ID.instruction.
 logic        if_id_valid;
 logic [31:0] if_id_pc;
+logic [31:0] if_id_instruction;
 
 // =====================================================
 // Pipeline registers
@@ -99,6 +109,9 @@ logic        wb_commit;
 logic        mem_wb_committed;
 logic        dmem_inflight;
 logic        dmem_fire;
+logic        dmem_done_q;
+logic [31:0] dmem_done_rd_data_q;
+logic        memory_complete;
 
 logic forward_a_from_ex_mem;
 logic forward_b_from_ex_mem;
@@ -120,9 +133,13 @@ logic [31:0] ex_mem_forward_data;
 assign dmem_fire = dmem_req && dmem_ready;
 assign memory_stall = ex_mem.valid &&
                       ex_mem.dmem_req &&
-                      !dmem_rd_data_valid;
-assign pipeline_stall = load_use_stall || memory_stall;
-assign fetch_enable = !pipeline_stall && !imem_busy;
+                      !memory_complete;
+assign memory_complete = dmem_rd_data_valid || dmem_done_q;
+assign fetch_stall = imem_pending_q || (imem_inflight_q && !imem_rd_data_valid);
+assign pipeline_stall = load_use_stall || memory_stall || fetch_stall;
+assign fetch_enable = !load_use_stall && !memory_stall &&
+                      !imem_pending_q && !imem_inflight_q && !imem_done_q;
+assign imem_fire = imem_req && imem_ready;
 
 // --------------------------------------------------------
 // Branch / jump redirect
@@ -138,9 +155,9 @@ assign redirect_target = ex_mem.branch_target;
 //   Otherwise hold.
 // --------------------------------------------------------
 always_ff @(posedge clk or negedge reset_n) begin
-  if (!reset_n)               pc <= RESET_PC;
-  else if (redirect_fire)     pc <= redirect_target;
-  else if (fetch_enable)      pc <= pc + 32'd4;
+  if (!reset_n)                 pc <= RESET_PC;
+  else if (redirect_fire)       pc <= redirect_target;
+  else if (imem_rd_data_valid)  pc <= imem_req_pc_q + 32'd4;
 end
 
 // --------------------------------------------------------
@@ -149,22 +166,64 @@ end
 //   across the cycles where the pipe is busy. pc_pipe carries
 //   the pc of the instruction whose word is arriving next cycle.
 // --------------------------------------------------------
-assign imem_req  = fetch_enable;
-assign imem_addr = pc;
+assign imem_req  = imem_pending_q;
+assign imem_addr = imem_req_pc_q;
+
+always_ff @(posedge clk or negedge reset_n) begin
+  if (!reset_n) begin
+    imem_pending_q <= 1'b0;
+    imem_inflight_q <= 1'b0;
+    imem_done_q <= 1'b0;
+    imem_req_pc_q <= RESET_PC;
+    imem_done_pc_q <= RESET_PC;
+    imem_done_data_q <= 32'h0;
+  end else if (redirect_fire) begin
+    imem_pending_q <= 1'b0;
+    imem_inflight_q <= 1'b0;
+    imem_done_q <= 1'b0;
+    imem_req_pc_q <= redirect_target;
+  end else begin
+    if (fetch_enable) begin
+      imem_pending_q <= 1'b1;
+      imem_req_pc_q <= pc;
+    end
+
+    if (imem_fire) begin
+      imem_pending_q <= 1'b0;
+      imem_inflight_q <= 1'b1;
+    end
+
+    if (imem_rd_data_valid) begin
+      imem_inflight_q <= 1'b0;
+    end
+
+    if (imem_rd_data_valid && (load_use_stall || memory_stall)) begin
+      imem_done_q <= 1'b1;
+      imem_done_pc_q <= imem_req_pc_q;
+      imem_done_data_q <= imem_data;
+    end else if (imem_done_q && !load_use_stall && !memory_stall && !fetch_stall) begin
+      imem_done_q <= 1'b0;
+    end
+  end
+end
 
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) begin
     if_id_valid <= 1'b0;
     if_id_pc    <= RESET_PC;
+    if_id_instruction <= 32'h0;
   end else if (redirect_fire) begin
     // Defensive: squash any speculative fetch behind the branch.
     // CONTROL HAZARD: IF/ID flush
     if_id_valid <= 1'b0;
   end else if (pipeline_stall) begin
     // hold PC and IF/ID
+  end else if (imem_done_q || imem_rd_data_valid) begin
+    if_id_valid <= 1'b1;
+    if_id_pc <= imem_done_q ? imem_done_pc_q : imem_req_pc_q;
+    if_id_instruction <= imem_done_q ? imem_done_data_q : imem_data;
   end else begin
-    if_id_valid <= fetch_enable;
-    if_id_pc    <= pc;
+    if_id_valid <= 1'b0;
   end
 end
 
@@ -174,7 +233,7 @@ end
 //   combinational and feed the ID/EX register.
 // --------------------------------------------------------
 decode u_decode (
-    .instruction (imem_data),
+    .instruction (if_id_instruction),
     .rs1_addr    (id_rs1_addr),
     .rs2_addr    (id_rs2_addr),
     .rd_addr     (id_rd_addr),
@@ -255,8 +314,8 @@ end
 
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) id_ex <= '0;
-  else if (memory_stall) begin
-    // Hold the instruction feeding MEM while the bus is busy
+  else if (memory_stall || fetch_stall) begin
+    // Hold pipeline state while memory or instruction fetch is waiting.
   end
   else if (load_use_stall) id_ex <= '0;
   else begin
@@ -350,8 +409,8 @@ end
 
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) ex_mem <= '0;
-  else if (memory_stall) begin
-    // Hold active memory operation stable until the bus completes it. 
+  else if (memory_stall || fetch_stall) begin
+    // Hold active pipeline state until the stalled interface completes.
   end
   else begin
     ex_mem.valid            <= id_ex.valid && !branch_redirect;
@@ -376,7 +435,7 @@ end
 //   Side effects are gated with ex_mem.valid so bubbles do not issue
 //   platform memory or MMIO transactions.
 // --------------------------------------------------------
-assign dmem_req         = ex_mem.valid && ex_mem.dmem_req && !dmem_inflight;
+assign dmem_req         = ex_mem.valid && ex_mem.dmem_req && !dmem_inflight && !dmem_done_q;
 assign dmem_wr_en       = ex_mem.dmem_wr_en;
 assign dmem_data_size   = ex_mem.dmem_size;
 assign dmem_addr        = ex_mem.alu_res;
@@ -386,10 +445,21 @@ assign dmem_zero_extend = ex_mem.dmem_zero_extend;
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) begin
     dmem_inflight <= 1'b0;
-  end else if (dmem_fire && !dmem_rd_data_valid) begin
-    dmem_inflight <= 1'b1;
-  end else if (dmem_rd_data_valid) begin
-    dmem_inflight <= 1'b0;
+    dmem_done_q <= 1'b0;
+    dmem_done_rd_data_q <= 32'h0;
+  end else begin
+    if (dmem_fire && !dmem_rd_data_valid) begin
+      dmem_inflight <= 1'b1;
+    end else if (dmem_rd_data_valid) begin
+      dmem_inflight <= 1'b0;
+    end
+
+    if (dmem_rd_data_valid && fetch_stall) begin
+      dmem_done_q <= 1'b1;
+      dmem_done_rd_data_q <= dmem_rd_data;
+    end else if (!memory_stall && !fetch_stall) begin
+      dmem_done_q <= 1'b0;
+    end
   end
 end
 
@@ -404,7 +474,7 @@ end
 // --------------------------------------------------------
 always_comb begin
   if (ex_mem.load_from_memory)
-    wb_data = dmem_rd_data;
+    wb_data = dmem_done_q ? dmem_done_rd_data_q : dmem_rd_data;
   else
     wb_data = ex_mem.forward_data;
 end
@@ -414,7 +484,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     mem_wb <= '0;
     mem_wb_committed <= 1'b0;
   end
-  else if (memory_stall) begin
+  else if (memory_stall || fetch_stall) begin
     // Hold forwarding data stable, but allow this WB slot to commit once.
     if (wb_commit) mem_wb_committed <= 1'b1;
   end

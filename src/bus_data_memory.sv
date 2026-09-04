@@ -18,7 +18,8 @@ module bus_data_memory #(
   input  logic                 cpu_imem_req,
   input  logic [31:0]          cpu_imem_addr,
   output logic [31:0]          cpu_imem_data,
-  output logic                 cpu_imem_busy,
+  output logic                 cpu_imem_ready,
+  output logic                 cpu_imem_rd_data_valid,
 
   input  logic                 cpu_dmem_req,
   input  logic                 cpu_dmem_wr_en,
@@ -42,6 +43,7 @@ logic dmem_uart_sel;
 logic ram_req;
 logic led_req;
 logic uart_req;
+logic rom_req;
 logic dmem_ram_accept;
 logic dmem_mmio_accept;
 logic ram_busy;
@@ -52,8 +54,10 @@ logic dmem_accept;
 logic [31:0] ram_rd_data;
 logic [31:0] led_rd_data;
 logic [31:0] uart_rd_data;
+logic [31:0] rom_rd_data;
 logic [31:0] ram_offset_addr;
 logic [31:0] rom_offset_addr;
+logic imem_rom_sel;
 
 typedef enum logic [1:0] {
   DMEM_TARGET_NONE = 2'b00,
@@ -75,12 +79,19 @@ typedef enum logic [1:0] {
   MMIO_DONE = 2'b11
 } mmio_state_t;
 
+typedef enum logic [1:0] {
+  ROM_IDLE = 2'b00,
+  ROM_WAIT = 2'b01,
+  ROM_DONE = 2'b10
+} rom_state_t;
+
 dmem_target_t read_target_q;
 dmem_target_t mmio_target_q;
 dmem_target_t dmem_target;
 dmem_target_t ram_active_target;
 ram_state_t ram_state_q;
 mmio_state_t mmio_state_q;
+rom_state_t rom_state_q;
 
 logic        ram_txn_wr_en_q;
 mem_size_t   ram_txn_data_size_q;
@@ -99,9 +110,11 @@ logic [31:0] mmio_addr_q;
 logic [31:0] mmio_wr_data_q;
 
 localparam logic [31:0] RAM_SIZE_BYTES = 32'h1 << RAM_ADDR_WIDTH;
+localparam logic [31:0] ROM_SIZE_BYTES = 32'h1 << ROM_ADDR_WIDTH;
 
 assign ram_offset_addr = cpu_dmem_addr - RAM_BASE_ADDR;
 assign rom_offset_addr = cpu_imem_addr - ROM_BASE_ADDR;
+assign imem_rom_sel = (cpu_imem_addr >= ROM_BASE_ADDR) && (rom_offset_addr < ROM_SIZE_BYTES);
 assign dmem_ram_sel = (cpu_dmem_addr >= RAM_BASE_ADDR) && (ram_offset_addr < RAM_SIZE_BYTES);
 assign dmem_led_sel = (cpu_dmem_addr == LED_BASE_ADDR);
 assign dmem_uart_sel = (cpu_dmem_addr[31:4] == UART_BASE_ADDR[31:4]);
@@ -146,11 +159,15 @@ always_comb begin
 end
 
 assign cpu_dmem_rd_data_valid = (ram_state_q == RAM_DONE) || (mmio_state_q == MMIO_DONE);
+assign cpu_imem_ready = imem_rom_sel && (rom_state_q == ROM_IDLE);
+assign cpu_imem_rd_data_valid = (rom_state_q == ROM_DONE);
+assign cpu_imem_data = rom_rd_data;
 
 always_comb begin
   ram_req = dmem_ram_accept;
   led_req = (mmio_state_q == MMIO_ISSUE) && (mmio_target_q == DMEM_TARGET_LED);
   uart_req = (mmio_state_q == MMIO_ISSUE) && (mmio_target_q == DMEM_TARGET_UART);
+  rom_req = cpu_imem_req && imem_rom_sel && (rom_state_q != ROM_WAIT);
 end
 
 always_ff @(posedge clk or negedge reset_n) begin
@@ -159,6 +176,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     mmio_target_q <= DMEM_TARGET_NONE;
     ram_state_q <= RAM_IDLE;
     mmio_state_q <= MMIO_IDLE;
+    rom_state_q <= ROM_IDLE;
     ram_txn_wr_en_q <= 1'b0;
     ram_txn_data_size_q <= WORD;
     ram_txn_addr_q <= 32'h0;
@@ -219,6 +237,26 @@ always_ff @(posedge clk or negedge reset_n) begin
         ram_state_q <= RAM_IDLE;
       end
     endcase
+
+    unique case (rom_state_q)
+      ROM_IDLE: begin
+        if (cpu_imem_req && imem_rom_sel) begin
+          rom_state_q <= ROM_WAIT;
+        end
+      end
+
+      ROM_WAIT: begin
+        rom_state_q <= ROM_DONE;
+      end
+
+      ROM_DONE: begin
+        if (cpu_imem_req && imem_rom_sel) begin
+          rom_state_q <= ROM_WAIT;
+        end else begin
+          rom_state_q <= ROM_IDLE;
+        end
+      end
+    endcase
   end
 end
 
@@ -275,15 +313,13 @@ mmio_uart #(
   .uart_tx(uart_tx)
 );
 
-assign cpu_imem_busy = 1'b0;
-
-instruction_memory #(
+rom_memory #(
   .ADDR_WIDTH(ROM_ADDR_WIDTH)
-) u_instruction_memory (
+) u_rom_memory (
   .clk       (clk),
-  .imem_req  (cpu_imem_req),
+  .imem_req  (rom_req),
   .imem_addr (rom_offset_addr),
-  .imem_data (cpu_imem_data)
+  .imem_data (rom_rd_data)
 );
 
 endmodule
