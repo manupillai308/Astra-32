@@ -36,7 +36,8 @@ module cpu #(
   output logic [31:0] dmem_wr_data,
   output logic        dmem_zero_extend,
   input  logic [31:0] dmem_rd_data,
-  input logic         dmem_busy
+  input  logic        dmem_ready,
+  input  logic        dmem_rd_data_valid
 );
 
 // =====================================================
@@ -96,6 +97,8 @@ logic [31:0] ex_next_seq_pc;
 logic [31:0] wb_data;
 logic        wb_commit;
 logic        mem_wb_committed;
+logic        dmem_inflight;
+logic        dmem_fire;
 
 logic forward_a_from_ex_mem;
 logic forward_b_from_ex_mem;
@@ -114,7 +117,10 @@ logic [31:0] ex_mem_forward_data;
 //   and the regfile write at end of WB lands BEFORE the
 //   next instruction's ID-stage regfile read.
 // --------------------------------------------------------
-assign memory_stall = dmem_busy;
+assign dmem_fire = dmem_req && dmem_ready;
+assign memory_stall = ex_mem.valid &&
+                      ex_mem.dmem_req &&
+                      !dmem_rd_data_valid;
 assign pipeline_stall = load_use_stall || memory_stall;
 assign fetch_enable = !pipeline_stall && !imem_busy;
 
@@ -370,12 +376,22 @@ end
 //   Side effects are gated with ex_mem.valid so bubbles do not issue
 //   platform memory or MMIO transactions.
 // --------------------------------------------------------
-assign dmem_req         = ex_mem.valid && ex_mem.dmem_req;
+assign dmem_req         = ex_mem.valid && ex_mem.dmem_req && !dmem_inflight;
 assign dmem_wr_en       = ex_mem.dmem_wr_en;
 assign dmem_data_size   = ex_mem.dmem_size;
 assign dmem_addr        = ex_mem.alu_res;
 assign dmem_wr_data     = ex_mem.rs2_data;
 assign dmem_zero_extend = ex_mem.dmem_zero_extend;
+
+always_ff @(posedge clk or negedge reset_n) begin
+  if (!reset_n) begin
+    dmem_inflight <= 1'b0;
+  end else if (dmem_fire && !dmem_rd_data_valid) begin
+    dmem_inflight <= 1'b1;
+  end else if (dmem_rd_data_valid) begin
+    dmem_inflight <= 1'b0;
+  end
+end
 
 // --------------------------------------------------------
 // MEM / WB  register

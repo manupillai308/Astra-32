@@ -27,7 +27,8 @@ module bus_data_memory #(
   input  logic [31:0]          cpu_dmem_wr_data,
   input  logic                 cpu_dmem_zero_extend,
   output logic [31:0]          cpu_dmem_rd_data,
-  output logic                 cpu_dmem_busy,
+  output logic                 cpu_dmem_ready,
+  output logic                 cpu_dmem_rd_data_valid,
 
   output logic [LED_WIDTH-1:0] mmio_led,
 
@@ -90,7 +91,8 @@ assign rom_offset_addr = cpu_imem_addr - ROM_BASE_ADDR;
 assign ram_sel = (cpu_dmem_addr >= RAM_BASE_ADDR) && (ram_offset_addr < RAM_SIZE_BYTES);
 assign led_sel = (cpu_dmem_addr == LED_BASE_ADDR);
 assign uart_sel = (cpu_dmem_addr[31:4] == UART_BASE_ADDR[31:4]);
-assign accept_txn = (bus_state_q == BUS_IDLE) && cpu_dmem_req;
+assign cpu_dmem_ready = (bus_state_q == BUS_IDLE);
+assign accept_txn = cpu_dmem_req && cpu_dmem_ready;
 assign active_target = (bus_state_q == BUS_WAIT) ? read_target_q : decoded_target;
 assign decoded_addr = (decoded_target == BUS_TARGET_RAM) ? ram_offset_addr : cpu_dmem_addr;
 
@@ -118,7 +120,7 @@ always_comb begin
   endcase
 end
 
-assign cpu_dmem_busy = (bus_state_q == BUS_WAIT) || (accept_txn && selected_busy);
+assign cpu_dmem_rd_data_valid = (bus_state_q == BUS_DONE);
 
 always_comb begin
   ram_req = 1'b0;
@@ -147,7 +149,7 @@ always_ff @(posedge clk or negedge reset_n) begin
   end else begin
     unique case (bus_state_q)
       BUS_IDLE: begin
-        if (cpu_dmem_req) begin
+        if (accept_txn) begin
           read_target_q <= decoded_target;
           txn_wr_en <= cpu_dmem_wr_en;
           txn_data_size <= cpu_dmem_data_size;
@@ -155,9 +157,7 @@ always_ff @(posedge clk or negedge reset_n) begin
           txn_wr_data <= cpu_dmem_wr_data;
           txn_zero_extend <= cpu_dmem_zero_extend;
 
-          if (selected_busy) begin
-            bus_state_q <= BUS_WAIT;
-          end
+          bus_state_q <= BUS_WAIT;
         end
       end
 
