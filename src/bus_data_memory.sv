@@ -316,10 +316,12 @@ mmio_uart #(
 rom_memory #(
   .ADDR_WIDTH(ROM_ADDR_WIDTH)
 ) u_rom_memory (
-  .clk       (clk),
-  .imem_req  (rom_req),
-  .imem_addr (rom_offset_addr),
-  .imem_data (rom_rd_data)
+  .clk         (clk),
+  .req         (rom_req),
+  .data_size   (WORD),
+  .addr        (rom_offset_addr),
+  .zero_extend (1'b0),
+  .rd_data     (rom_rd_data)
 );
 
 endmodule

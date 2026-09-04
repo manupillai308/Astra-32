@@ -46,7 +46,7 @@ tests/$(1)/$(1).mem: tests/$(1)/$(1).s tests/link.ld
 	@$$(AS) $$(ASFLAGS) -o tests/$(1)/$(1).o tests/$(1)/$(1).s
 	@$$(LD) $$(LDFLAGS) -o tests/$(1)/$(1).elf tests/$(1)/$(1).o
 	@$$(OBJCOPY) -O binary tests/$(1)/$(1).elf tests/$(1)/$(1).bin
-	@od -An -tx1 -v -w4 tests/$(1)/$(1).bin > tests/$(1)/$(1).mem
+	@od -An -tx4 -v -w4 tests/$(1)/$(1).bin > tests/$(1)/$(1).mem
 	@echo "[ASM]  $(1)"
 endef
 $(foreach t,$(TESTS),$(eval $(call ASM_template,$(t))))
