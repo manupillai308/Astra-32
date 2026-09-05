@@ -45,7 +45,6 @@ logic ram_req;
 logic led_req;
 logic uart_req;
 logic rom_req;
-logic dmem_ram_accept;
 logic dmem_mmio_accept;
 logic ram_busy;
 logic uart_busy;
@@ -56,9 +55,13 @@ logic [31:0] led_rd_data;
 logic [31:0] uart_rd_data;
 logic [31:0] rom_rd_data;
 logic [31:0] ram_offset_addr;
+logic [31:0] imem_ram_offset_addr;
 logic [31:0] imem_rom_offset_addr;
 logic [31:0] dmem_rom_offset_addr;
+logic imem_ram_sel;
 logic imem_rom_sel;
+logic imem_ram_wants;
+logic dmem_ram_wants;
 logic imem_rom_wants;
 logic dmem_rom_wants;
 
@@ -97,6 +100,12 @@ typedef enum logic [1:0] {
   ROM_OWNER_DMEM = 2'b10
 } rom_owner_t;
 
+typedef enum logic [1:0] {
+  RAM_OWNER_NONE = 2'b00,
+  RAM_OWNER_IMEM = 2'b01,
+  RAM_OWNER_DMEM = 2'b10
+} ram_owner_t;
+
 dmem_target_t read_target_q;
 dmem_target_t mmio_target_q;
 dmem_target_t dmem_target;
@@ -105,6 +114,8 @@ mmio_state_t mmio_state_q;
 rom_state_t rom_state_q;
 rom_owner_t rom_owner_q;
 rom_owner_t rom_selected_owner;
+ram_owner_t ram_owner_q;
+ram_owner_t ram_selected_owner;
 
 logic        ram_txn_wr_en_q;
 mem_size_t   ram_txn_data_size_q;
@@ -126,15 +137,20 @@ mem_size_t   rom_data_size_q;
 logic [31:0] rom_addr_q;
 logic        rom_zero_extend_q;
 logic        rom_rr_q;
+logic        ram_rr_q;
 
 localparam logic [31:0] RAM_SIZE_BYTES = 32'h1 << RAM_ADDR_WIDTH;
 localparam logic [31:0] ROM_SIZE_BYTES = 32'h1 << ROM_ADDR_WIDTH;
 
 assign ram_offset_addr = cpu_dmem_addr - RAM_BASE_ADDR;
+assign imem_ram_offset_addr = cpu_imem_addr - RAM_BASE_ADDR;
 assign imem_rom_offset_addr = cpu_imem_addr - ROM_BASE_ADDR;
 assign dmem_rom_offset_addr = cpu_dmem_addr - ROM_BASE_ADDR;
+assign imem_ram_sel = (cpu_imem_addr >= RAM_BASE_ADDR) && (imem_ram_offset_addr < RAM_SIZE_BYTES);
 assign imem_rom_sel = (cpu_imem_addr >= ROM_BASE_ADDR) && (imem_rom_offset_addr < ROM_SIZE_BYTES);
 assign dmem_rom_sel = (cpu_dmem_addr >= ROM_BASE_ADDR) && (dmem_rom_offset_addr < ROM_SIZE_BYTES);
+assign imem_ram_wants = cpu_imem_req && imem_ram_sel;
+assign dmem_ram_wants = cpu_dmem_req && dmem_ram_sel;
 assign imem_rom_wants = cpu_imem_req && imem_rom_sel;
 assign dmem_rom_wants = cpu_dmem_req && dmem_rom_sel;
 assign dmem_ram_sel = (cpu_dmem_addr >= RAM_BASE_ADDR) && (ram_offset_addr < RAM_SIZE_BYTES);
@@ -142,7 +158,8 @@ assign dmem_led_sel = (cpu_dmem_addr == LED_BASE_ADDR);
 assign dmem_uart_sel = (cpu_dmem_addr[31:4] == UART_BASE_ADDR[31:4]);
 always_comb begin
   unique case (dmem_target)
-    DMEM_TARGET_RAM:  cpu_dmem_ready = (ram_state_q == RAM_IDLE);
+    DMEM_TARGET_RAM:  cpu_dmem_ready = (ram_state_q == RAM_IDLE) &&
+                                       (ram_selected_owner == RAM_OWNER_DMEM);
     DMEM_TARGET_ROM:  cpu_dmem_ready = (rom_state_q == ROM_IDLE) &&
                                        (rom_selected_owner == ROM_OWNER_DMEM);
     DMEM_TARGET_LED,
@@ -153,7 +170,6 @@ always_comb begin
 end
 
 assign dmem_accept = cpu_dmem_req && cpu_dmem_ready;
-assign dmem_ram_accept = dmem_accept && (dmem_target == DMEM_TARGET_RAM);
 assign dmem_mmio_accept = dmem_accept &&
                           (dmem_target != DMEM_TARGET_RAM) &&
                           (dmem_target != DMEM_TARGET_ROM);
@@ -176,6 +192,19 @@ always_comb begin
 end
 
 always_comb begin
+  ram_selected_owner = RAM_OWNER_NONE;
+
+  if (ram_state_q == RAM_IDLE) begin
+    unique case ({imem_ram_wants, dmem_ram_wants})
+      2'b10: ram_selected_owner = RAM_OWNER_IMEM;
+      2'b01: ram_selected_owner = RAM_OWNER_DMEM;
+      2'b11: ram_selected_owner = ram_rr_q ? RAM_OWNER_DMEM : RAM_OWNER_IMEM;
+      default: ram_selected_owner = RAM_OWNER_NONE;
+    endcase
+  end
+end
+
+always_comb begin
   rom_selected_owner = ROM_OWNER_NONE;
 
   if (rom_state_q == ROM_IDLE) begin
@@ -188,16 +217,23 @@ always_comb begin
   end
 end
 
-assign cpu_dmem_rd_data_valid = (ram_state_q == RAM_DONE) ||
+assign cpu_dmem_rd_data_valid = ((ram_state_q == RAM_DONE) &&
+                                 (ram_owner_q == RAM_OWNER_DMEM)) ||
                                 (mmio_state_q == MMIO_DONE) ||
                                 ((rom_state_q == ROM_DONE) &&
                                  (rom_owner_q == ROM_OWNER_DMEM));
-assign cpu_imem_ready = imem_rom_sel &&
-                        (rom_state_q == ROM_IDLE) &&
-                        (rom_selected_owner == ROM_OWNER_IMEM);
-assign cpu_imem_rd_data_valid = (rom_state_q == ROM_DONE) &&
-                                (rom_owner_q == ROM_OWNER_IMEM);
-assign cpu_imem_data = rom_rd_data;
+assign cpu_imem_ready = (imem_rom_sel &&
+                         (rom_state_q == ROM_IDLE) &&
+                         (rom_selected_owner == ROM_OWNER_IMEM)) ||
+                        (imem_ram_sel &&
+                         (ram_state_q == RAM_IDLE) &&
+                         (ram_selected_owner == RAM_OWNER_IMEM));
+assign cpu_imem_rd_data_valid = ((rom_state_q == ROM_DONE) &&
+                                 (rom_owner_q == ROM_OWNER_IMEM)) ||
+                                ((ram_state_q == RAM_DONE) &&
+                                 (ram_owner_q == RAM_OWNER_IMEM));
+assign cpu_imem_data = ((ram_state_q == RAM_DONE) &&
+                        (ram_owner_q == RAM_OWNER_IMEM)) ? ram_rd_data : rom_rd_data;
 
 always_comb begin
   ram_req = (ram_state_q == RAM_ISSUE);
@@ -214,6 +250,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     mmio_state_q <= MMIO_IDLE;
     rom_state_q <= ROM_IDLE;
     rom_owner_q <= ROM_OWNER_NONE;
+    ram_owner_q <= RAM_OWNER_NONE;
     ram_txn_wr_en_q <= 1'b0;
     ram_txn_data_size_q <= WORD;
     ram_txn_addr_q <= 32'h0;
@@ -227,6 +264,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     rom_addr_q <= 32'h0;
     rom_zero_extend_q <= 1'b0;
     rom_rr_q <= 1'b0;
+    ram_rr_q <= 1'b0;
   end else begin
     if (dmem_mmio_accept) begin
       mmio_target_q <= dmem_target;
@@ -257,13 +295,26 @@ always_ff @(posedge clk or negedge reset_n) begin
 
     unique case (ram_state_q)
       RAM_IDLE: begin
-        if (dmem_ram_accept) begin
+        if (ram_selected_owner == RAM_OWNER_IMEM) begin
+          read_target_q <= DMEM_TARGET_RAM;
+          ram_owner_q <= RAM_OWNER_IMEM;
+          ram_txn_wr_en_q <= 1'b0;
+          ram_txn_data_size_q <= WORD;
+          ram_txn_addr_q <= imem_ram_offset_addr;
+          ram_txn_wr_data_q <= 32'h0;
+          ram_txn_zero_extend_q <= 1'b0;
+          ram_rr_q <= 1'b1;
+
+          ram_state_q <= RAM_ISSUE;
+        end else if (ram_selected_owner == RAM_OWNER_DMEM) begin
           read_target_q <= dmem_target;
+          ram_owner_q <= RAM_OWNER_DMEM;
           ram_txn_wr_en_q <= cpu_dmem_wr_en;
           ram_txn_data_size_q <= cpu_dmem_data_size;
           ram_txn_addr_q <= dmem_decoded_addr;
           ram_txn_wr_data_q <= cpu_dmem_wr_data;
           ram_txn_zero_extend_q <= cpu_dmem_zero_extend;
+          ram_rr_q <= 1'b0;
 
           ram_state_q <= RAM_ISSUE;
         end
