@@ -12,7 +12,7 @@ module rom_memory #(
 );
 
 localparam int WORD_ADDR_WIDTH = ADDR_WIDTH - 2;
-
+(* ram_style = "block" *)
 logic [31:0] mem [0:(2**WORD_ADDR_WIDTH)-1];
 logic [31:0] ram_rd_data;
 logic [1:0] ram_byte_offset;
