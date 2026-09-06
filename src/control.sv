@@ -11,6 +11,7 @@ module control (
   input  logic       b_type,
   input  logic       u_type,
   input  logic       j_type,
+  input  logic       system_type,
 
   // Instruction fields
   input  logic [2:0] funct3,
@@ -27,7 +28,12 @@ module control (
   output mem_size_t   dmem_size,
   output logic        dmem_wr_en,
   output logic        dmem_zero_extend,
-  output logic        rf_wr_en
+  output logic        rf_wr_en,
+  output logic        uses_rs1,
+  output logic        uses_rs2,
+  output logic        csr_req,
+  output csr_op_t     csr_op,
+  output logic        csr_imm_sel
 );
 
 // --------------------------------------------------------
@@ -40,7 +46,7 @@ logic       funct7_bit5;
 
 assign funct7_bit5 = funct7[5];
 
-control_t ctrl_r, ctrl_i, ctrl_s, ctrl_b, ctrl_u, ctrl_j, ctrl;
+control_t ctrl_r, ctrl_i, ctrl_s, ctrl_b, ctrl_u, ctrl_j, ctrl_system, ctrl;
 
 
 // --------------------------------------------------------
@@ -52,6 +58,8 @@ assign funct_r = {funct7_bit5, funct3};
 always_comb begin
     ctrl_r = '0;
     ctrl_r.rf_write_enable = 1'b1;
+    ctrl_r.uses_rs1 = 1'b1;
+    ctrl_r.uses_rs2 = 1'b1;
 
     case (funct_r)
         R_ADD  : ctrl_r.alu_op = ADD;
@@ -77,6 +85,7 @@ always_comb begin
     ctrl_i = '0;
 
     ctrl_i.rf_write_enable = 1'b1;
+    ctrl_i.uses_rs1 = 1'b1;
     ctrl_i.alu_src_b_select = 1'b1;
 
     case (opcode_i)
@@ -155,6 +164,8 @@ always_comb begin
 
     ctrl_s.mem_valid = 1'b1;
     ctrl_s.mem_write = 1'b1;
+    ctrl_s.uses_rs1 = 1'b1;
+    ctrl_s.uses_rs2 = 1'b1;
 
     ctrl_s.alu_src_b_select = 1'b1;
 
@@ -173,6 +184,8 @@ end
 always_comb begin
     ctrl_b = '0;
 
+    ctrl_b.uses_rs1 = 1'b1;
+    ctrl_b.uses_rs2 = 1'b1;
     ctrl_b.alu_src_a_select = 1'b1;
     ctrl_b.alu_src_b_select = 1'b1;
 
@@ -221,6 +234,29 @@ always_comb begin
 end
 
 // --------------------------------------------------------
+// SYSTEM / CSR Control
+// --------------------------------------------------------
+
+always_comb begin
+    ctrl_system = '0;
+
+    if (system_type && (funct3 != 3'b000)) begin
+        ctrl_system.rf_write_enable = 1'b1;
+        ctrl_system.wb_src = WB_SRC_CSR;
+        ctrl_system.csr_req = 1'b1;
+        ctrl_system.csr_imm_select = funct3[2];
+        ctrl_system.uses_rs1 = !funct3[2];
+
+        unique case (funct3[1:0])
+            2'b01: ctrl_system.csr_op = CSR_OP_RW;
+            2'b10: ctrl_system.csr_op = CSR_OP_RS;
+            2'b11: ctrl_system.csr_op = CSR_OP_RC;
+            default: ctrl_system.csr_op = CSR_OP_RW;
+        endcase
+    end
+end
+
+// --------------------------------------------------------
 // Final Control Selection
 // --------------------------------------------------------
 
@@ -233,6 +269,7 @@ always_comb begin
     else if (b_type) ctrl = ctrl_b;
     else if (u_type) ctrl = ctrl_u;
     else if (j_type) ctrl = ctrl_j;
+    else if (system_type) ctrl = ctrl_system;
 end
 
 
@@ -254,5 +291,10 @@ assign dmem_size         = ctrl.mem_size;
 assign dmem_zero_extend  = ctrl.load_zero_extend;
 
 assign rf_wr_en          = ctrl.rf_write_enable;
+assign uses_rs1          = ctrl.uses_rs1;
+assign uses_rs2          = ctrl.uses_rs2;
+assign csr_req           = ctrl.csr_req;
+assign csr_op            = ctrl.csr_op;
+assign csr_imm_sel       = ctrl.csr_imm_select;
 
 endmodule

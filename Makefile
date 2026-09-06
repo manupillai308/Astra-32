@@ -16,7 +16,7 @@ AS       := riscv64-unknown-elf-as
 LD       := riscv64-unknown-elf-ld
 OBJCOPY  := riscv64-unknown-elf-objcopy
 
-ASFLAGS  := -march=rv32i -mabi=ilp32
+ASFLAGS  := -march=rv32i_zicsr -mabi=ilp32
 LDFLAGS  := -m elf32lriscv -T tests/link.ld
 
 VSIM     := vsim -c -voptargs="+acc" -do "run -all; quit"

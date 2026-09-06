@@ -82,6 +82,8 @@ logic [6:0]  id_opcode;
 logic [2:0]  id_funct3;
 logic [6:0]  id_funct7;
 logic        id_r_type, id_i_type, id_s_type, id_b_type, id_u_type, id_j_type;
+logic        id_system_type;
+logic [11:0] id_csr_addr;
 logic [31:0] id_immediate;
 
 logic [31:0] id_rs1_data, id_rs2_data;
@@ -92,6 +94,11 @@ wb_src_t     id_rf_wr_data_sel;
 logic        id_dmem_req, id_dmem_wr_en, id_dmem_zero_extend;
 mem_size_t   id_dmem_size;
 logic        id_rf_wr_en;
+logic        id_uses_rs1, id_uses_rs2;
+logic        id_csr_req, id_csr_imm_sel;
+csr_op_t     id_csr_op;
+logic [31:0] id_csr_rd_data;
+logic [31:0] id_csr_old_data;
 
 // =====================================================
 // EX stage signals
@@ -106,6 +113,8 @@ logic [31:0] ex_next_seq_pc;
 // =====================================================
 logic [31:0] wb_data;
 logic        wb_commit;
+logic        csr_commit;
+logic        retire_commit;
 logic        mem_wb_committed;
 logic        dmem_inflight;
 logic        dmem_fire;
@@ -123,6 +132,10 @@ logic forward_b_from_mem_wb;
 logic [31:0] rs1_data_resolved;
 logic [31:0] rs2_data_resolved;
 logic [31:0] ex_mem_forward_data;
+logic [31:0] ex_csr_src_data;
+logic [31:0] ex_csr_wr_data;
+logic        ex_csr_src_zero;
+logic        ex_csr_wr_en;
 // --------------------------------------------------------
 // Fetch gate
 //   Empty front-half => safe to fetch. mem_wb.valid is NOT
@@ -246,6 +259,8 @@ decode u_decode (
     .b_type      (id_b_type),
     .u_type      (id_u_type),
     .j_type      (id_j_type),
+    .system_type (id_system_type),
+    .csr_addr    (id_csr_addr),
     .immediate   (id_immediate)
 );
 
@@ -256,6 +271,7 @@ control u_control (
     .b_type           (id_b_type),
     .u_type           (id_u_type),
     .j_type           (id_j_type),
+    .system_type      (id_system_type),
     .funct3           (id_funct3),
     .funct7           (id_funct7),
     .opcode           (id_opcode),
@@ -269,12 +285,19 @@ control u_control (
     .dmem_size        (id_dmem_size),
     .dmem_wr_en       (id_dmem_wr_en),
     .dmem_zero_extend (id_dmem_zero_extend),
-    .rf_wr_en         (id_rf_wr_en)
+    .rf_wr_en         (id_rf_wr_en),
+    .uses_rs1         (id_uses_rs1),
+    .uses_rs2         (id_uses_rs2),
+    .csr_req          (id_csr_req),
+    .csr_op           (id_csr_op),
+    .csr_imm_sel      (id_csr_imm_sel)
 );
 
 // Regfile: combinational read in ID, sync write from WB.
 // Write enable is gated by mem_wb.valid so bubbles don't write.
-assign wb_commit = mem_wb.valid && mem_wb.rf_wr_en && !mem_wb_committed;
+assign retire_commit = mem_wb.valid && !mem_wb_committed;
+assign wb_commit = retire_commit && mem_wb.rf_wr_en;
+assign csr_commit = retire_commit && mem_wb.csr_wr_en;
 
 register_file u_register_file (
     .clk      (clk),
@@ -287,6 +310,29 @@ register_file u_register_file (
     .rs1_data (id_rs1_data),
     .rs2_data (id_rs2_data)
 );
+
+csr_file u_csr_file (
+    .clk         (clk),
+    .reset_n     (reset_n),
+    .rd_addr     (id_csr_addr),
+    .rd_data     (id_csr_rd_data),
+    .wr_en       (csr_commit),
+    .wr_addr     (mem_wb.csr_addr),
+    .wr_data     (mem_wb.csr_wr_data),
+    .instret_inc (retire_commit)
+);
+
+always_comb begin
+  id_csr_old_data = id_csr_rd_data;
+
+  if (id_ex.valid && ex_csr_wr_en && (id_ex.csr_addr == id_csr_addr)) begin
+    id_csr_old_data = ex_csr_wr_data;
+  end else if (ex_mem.valid && ex_mem.csr_wr_en && (ex_mem.csr_addr == id_csr_addr)) begin
+    id_csr_old_data = ex_mem.csr_wr_data;
+  end else if (mem_wb.valid && mem_wb.csr_wr_en && (mem_wb.csr_addr == id_csr_addr)) begin
+    id_csr_old_data = mem_wb.csr_wr_data;
+  end
+end
 
 // --------------------------------------------------------
 // ID / EX  register
@@ -302,13 +348,13 @@ always_comb begin
   id_fwd_a_sel = FWD_RF;
   id_fwd_b_sel = FWD_RF;
 
-  if(id_ex.valid && id_ex.rf_wr_en && (id_ex.rd_addr != 0) && (id_ex.rd_addr == id_rs1_addr)) id_fwd_a_sel = FWD_EXMEM;
+  if(id_uses_rs1 && id_ex.valid && id_ex.rf_wr_en && (id_ex.rd_addr != 0) && (id_ex.rd_addr == id_rs1_addr)) id_fwd_a_sel = FWD_EXMEM;
 
-  else if (ex_mem.valid && ex_mem.rf_wr_en && (ex_mem.rd_addr != 0) && (ex_mem.rd_addr == id_rs1_addr)) id_fwd_a_sel = FWD_MEMWB;
+  else if (id_uses_rs1 && ex_mem.valid && ex_mem.rf_wr_en && (ex_mem.rd_addr != 0) && (ex_mem.rd_addr == id_rs1_addr)) id_fwd_a_sel = FWD_MEMWB;
 
-  if(id_ex.valid && id_ex.rf_wr_en && (id_ex.rd_addr != 0) && (id_ex.rd_addr == id_rs2_addr)) id_fwd_b_sel = FWD_EXMEM;
+  if(id_uses_rs2 && id_ex.valid && id_ex.rf_wr_en && (id_ex.rd_addr != 0) && (id_ex.rd_addr == id_rs2_addr)) id_fwd_b_sel = FWD_EXMEM;
 
-  else if (ex_mem.valid && ex_mem.rf_wr_en && (ex_mem.rd_addr != 0) && (ex_mem.rd_addr == id_rs2_addr)) id_fwd_b_sel = FWD_MEMWB;
+  else if (id_uses_rs2 && ex_mem.valid && ex_mem.rf_wr_en && (ex_mem.rd_addr != 0) && (ex_mem.rd_addr == id_rs2_addr)) id_fwd_b_sel = FWD_MEMWB;
 end
 
 
@@ -324,7 +370,10 @@ always_ff @(posedge clk or negedge reset_n) begin
     id_ex.rs1_data         <= id_rs1_data;
     id_ex.rs2_data         <= id_rs2_data;
     id_ex.immediate        <= id_immediate;
+    id_ex.rs1_addr         <= id_rs1_addr;
     id_ex.rd_addr          <= id_rd_addr;
+    id_ex.uses_rs1         <= id_uses_rs1;
+    id_ex.uses_rs2         <= id_uses_rs2;
     id_ex.op1_sel          <= id_op1_sel;
     id_ex.op2_sel          <= id_op2_sel;
     id_ex.alu_op           <= id_alu_op;
@@ -337,6 +386,11 @@ always_ff @(posedge clk or negedge reset_n) begin
     id_ex.dmem_zero_extend <= id_dmem_zero_extend;
     id_ex.rf_wr_en         <= id_rf_wr_en;
     id_ex.rf_wr_data_sel   <= id_rf_wr_data_sel;
+    id_ex.csr_req          <= id_csr_req;
+    id_ex.csr_addr         <= id_csr_addr;
+    id_ex.csr_op           <= id_csr_op;
+    id_ex.csr_imm_sel      <= id_csr_imm_sel;
+    id_ex.csr_old_data     <= id_csr_old_data;
     id_ex.fwd_a_sel        <= id_fwd_a_sel;
     id_ex.fwd_b_sel        <= id_fwd_b_sel;
     id_ex.load_from_memory <= (id_rf_wr_data_sel == WB_SRC_MEM);
@@ -353,7 +407,8 @@ end
 // N:   lw   x5, 0(x0)
 // N+1: addi x6, x5, 3
 assign load_use_stall = id_ex.valid && id_ex.dmem_req && !id_ex.dmem_wr_en // id_ex is a load
-                        && (id_ex.rd_addr == id_rs1_addr || id_ex.rd_addr == id_rs2_addr) 
+                        && ((id_uses_rs1 && (id_ex.rd_addr == id_rs1_addr)) ||
+                            (id_uses_rs2 && (id_ex.rd_addr == id_rs2_addr)))
                         && (id_ex.rd_addr != 0);
 
 always_comb begin
@@ -403,9 +458,26 @@ always_comb begin
     WB_SRC_ALU: ex_mem_forward_data = ex_alu_res;
     WB_SRC_IMM: ex_mem_forward_data = id_ex.immediate;
     WB_SRC_PC:  ex_mem_forward_data = ex_next_seq_pc;
+    WB_SRC_CSR: ex_mem_forward_data = id_ex.csr_old_data;
     default:    ex_mem_forward_data = 32'h0;
   endcase
 end
+
+assign ex_csr_src_data = id_ex.csr_imm_sel ? id_ex.immediate : rs1_data_resolved;
+assign ex_csr_src_zero = (id_ex.rs1_addr == 5'h0);
+
+always_comb begin
+  unique case (id_ex.csr_op)
+    CSR_OP_RW: ex_csr_wr_data = ex_csr_src_data;
+    CSR_OP_RS: ex_csr_wr_data = id_ex.csr_old_data | ex_csr_src_data;
+    CSR_OP_RC: ex_csr_wr_data = id_ex.csr_old_data & ~ex_csr_src_data;
+    default:   ex_csr_wr_data = ex_csr_src_data;
+  endcase
+end
+
+assign ex_csr_wr_en = id_ex.csr_req &&
+                      ((id_ex.csr_op == CSR_OP_RW) ||
+                       ((id_ex.csr_op != CSR_OP_RW) && !ex_csr_src_zero));
 
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) ex_mem <= '0;
@@ -427,6 +499,9 @@ always_ff @(posedge clk or negedge reset_n) begin
     ex_mem.rf_wr_en         <= id_ex.rf_wr_en;
     ex_mem.forward_data     <= ex_mem_forward_data;
     ex_mem.load_from_memory <= id_ex.load_from_memory;
+    ex_mem.csr_wr_en        <= ex_csr_wr_en;
+    ex_mem.csr_addr         <= id_ex.csr_addr;
+    ex_mem.csr_wr_data      <= ex_csr_wr_data;
   end
 end
 
@@ -485,8 +560,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     mem_wb_committed <= 1'b0;
   end
   else if (memory_stall || fetch_stall) begin
-    // Hold forwarding data stable, but allow this WB slot to commit once.
-    if (wb_commit) mem_wb_committed <= 1'b1;
+    // Hold forwarding data stable, but allow this WB slot to retire once.
+    if (retire_commit) mem_wb_committed <= 1'b1;
   end
   else begin
     mem_wb.valid          <= ex_mem.valid;
@@ -494,6 +569,9 @@ always_ff @(posedge clk or negedge reset_n) begin
     mem_wb.rf_wr_en       <= ex_mem.rf_wr_en;
     mem_wb_committed      <= 1'b0;
     mem_wb.wb_data        <= wb_data;
+    mem_wb.csr_wr_en      <= ex_mem.csr_wr_en;
+    mem_wb.csr_addr       <= ex_mem.csr_addr;
+    mem_wb.csr_wr_data    <= ex_mem.csr_wr_data;
   end
 end
 

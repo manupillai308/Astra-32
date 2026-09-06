@@ -16,7 +16,8 @@ typedef enum logic [6:0] {
   OPCODE_B_TYPE = 7'h63,
   OPCODE_LUI = 7'h37,
   OPCODE_AUIPC = 7'h17,
-  OPCODE_JAL = 7'h6F
+  OPCODE_JAL = 7'h6F,
+  OPCODE_SYSTEM = 7'h73
  } opcode_t;
 
 
@@ -126,12 +127,19 @@ typedef enum logic [2:0] {
 // Register File Writeback Sources
 // --------------------------------------------------------
 
-typedef enum logic [1:0] {
-    WB_SRC_ALU = 2'b00,
-    WB_SRC_MEM = 2'b01,
-    WB_SRC_IMM = 2'b10,
-    WB_SRC_PC  = 2'b11
+typedef enum logic [2:0] {
+    WB_SRC_ALU = 3'b000,
+    WB_SRC_MEM = 3'b001,
+    WB_SRC_IMM = 3'b010,
+    WB_SRC_PC  = 3'b011,
+    WB_SRC_CSR = 3'b100
 } wb_src_t;
+
+typedef enum logic [1:0] {
+    CSR_OP_RW = 2'b00,
+    CSR_OP_RS = 2'b01,
+    CSR_OP_RC = 2'b10
+} csr_op_t;
 
 
 // --------------------------------------------------------
@@ -145,6 +153,12 @@ typedef struct packed {
     logic      load_zero_extend;    // 1 = zero-extend loads (LBU/LHU)
 
     logic      rf_write_enable;     // Register file write enable
+    logic      uses_rs1;            // Instruction consumes rs1 as a GPR
+    logic      uses_rs2;            // Instruction consumes rs2 as a GPR
+
+    logic      csr_req;             // CSR instruction
+    csr_op_t   csr_op;              // RW/RS/RC operation
+    logic      csr_imm_select;      // 1 = use zimm, 0 = use rs1 data
 
     logic      pc_src_select;       // 1 = branch/jump, 0 = sequential
 
@@ -178,7 +192,10 @@ typedef struct packed {
     logic [31:0] rs1_data;
     logic [31:0] rs2_data;
     logic [31:0] immediate;
+    logic [4:0]  rs1_addr;
     logic [4:0]  rd_addr;
+    logic        uses_rs1;
+    logic        uses_rs2;
     // ALU controls
     logic        op1_sel;
     logic        op2_sel;
@@ -195,6 +212,11 @@ typedef struct packed {
     // WB controls
     logic        rf_wr_en;
     wb_src_t     rf_wr_data_sel;
+    logic        csr_req;
+    logic [11:0] csr_addr;
+    csr_op_t     csr_op;
+    logic        csr_imm_sel;
+    logic [31:0] csr_old_data;
     fwd_flag_t   fwd_a_sel;
     fwd_flag_t   fwd_b_sel;
     logic        load_from_memory;
@@ -219,6 +241,9 @@ typedef struct packed {
     logic        rf_wr_en;
     logic [31:0] forward_data;
     logic        load_from_memory;
+    logic        csr_wr_en;
+    logic [11:0] csr_addr;
+    logic [31:0] csr_wr_data;
 } ex_mem_t;
 
 // MEM/WB: writeback inputs. dmem_rd_data is taken straight off the
@@ -228,6 +253,9 @@ typedef struct packed {
     logic [4:0]  rd_addr;
     logic        rf_wr_en;
     logic [31:0] wb_data;
+    logic        csr_wr_en;
+    logic [11:0] csr_addr;
+    logic [31:0] csr_wr_data;
 } mem_wb_t;
 
 endpackage
