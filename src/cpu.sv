@@ -58,6 +58,8 @@ logic        load_use_stall;
 logic        memory_stall;
 logic        pipeline_stall;
 logic        branch_redirect;
+logic        trap_redirect;
+logic        mret_redirect;
 logic        redirect_fire;
 logic [31:0] redirect_target;
 
@@ -99,6 +101,9 @@ logic        id_csr_req, id_csr_imm_sel;
 csr_op_t     id_csr_op;
 logic [31:0] id_csr_rd_data;
 logic [31:0] id_csr_old_data;
+retire_action_t id_retire_action;
+trap_cause_t id_trap_cause;
+trap_payload_t id_trap;
 
 // =====================================================
 // EX stage signals
@@ -114,7 +119,10 @@ logic [31:0] ex_next_seq_pc;
 logic [31:0] wb_data;
 logic        wb_commit;
 logic        csr_commit;
+logic        trap_commit;
+logic        mret_commit;
 logic        retire_commit;
+logic        instret_commit;
 logic        mem_wb_committed;
 logic        dmem_inflight;
 logic        dmem_fire;
@@ -136,6 +144,12 @@ logic [31:0] ex_csr_src_data;
 logic [31:0] ex_csr_wr_data;
 logic        ex_csr_src_zero;
 logic        ex_csr_wr_en;
+retire_action_t ex_retire_action;
+trap_payload_t ex_trap;
+logic        ex_load_store_misaligned;
+logic        ex_inst_addr_misaligned;
+logic [31:0] csr_mtvec;
+logic [31:0] csr_mepc;
 // --------------------------------------------------------
 // Fetch gate
 //   Empty front-half => safe to fetch. mem_wb.valid is NOT
@@ -145,6 +159,7 @@ logic        ex_csr_wr_en;
 // --------------------------------------------------------
 assign dmem_fire = dmem_req && dmem_ready;
 assign memory_stall = ex_mem.valid &&
+                      (ex_mem.retire_action == RETIRE_NORMAL) &&
                       ex_mem.dmem_req &&
                       !memory_complete;
 assign memory_complete = dmem_rd_data_valid || dmem_done_q;
@@ -158,9 +173,15 @@ assign imem_fire = imem_req && imem_ready;
 // Branch / jump redirect
 //   Decided in EX, observed via EX/MEM register.
 // --------------------------------------------------------
-assign branch_redirect = ex_mem.valid && (ex_mem.branch_taken || ex_mem.pc_sel);
-assign redirect_fire = branch_redirect && !memory_stall;
-assign redirect_target = ex_mem.branch_target;
+assign branch_redirect = ex_mem.valid &&
+                         (ex_mem.retire_action == RETIRE_NORMAL) &&
+                         (ex_mem.branch_taken || ex_mem.pc_sel);
+assign trap_redirect = trap_commit;
+assign mret_redirect = mret_commit;
+assign redirect_fire = trap_redirect || mret_redirect || (branch_redirect && !memory_stall);
+assign redirect_target = trap_redirect ? csr_mtvec :
+                         mret_redirect ? csr_mepc :
+                         ex_mem.branch_target;
 
 // --------------------------------------------------------
 // PC register
@@ -275,6 +296,7 @@ control u_control (
     .funct3           (id_funct3),
     .funct7           (id_funct7),
     .opcode           (id_opcode),
+    .csr_addr         (id_csr_addr),
 
     .pc_sel           (id_pc_sel),
     .op1_sel          (id_op1_sel),
@@ -290,14 +312,19 @@ control u_control (
     .uses_rs2         (id_uses_rs2),
     .csr_req          (id_csr_req),
     .csr_op           (id_csr_op),
-    .csr_imm_sel      (id_csr_imm_sel)
+    .csr_imm_sel      (id_csr_imm_sel),
+    .retire_action    (id_retire_action),
+    .trap_cause       (id_trap_cause)
 );
 
 // Regfile: combinational read in ID, sync write from WB.
 // Write enable is gated by mem_wb.valid so bubbles don't write.
 assign retire_commit = mem_wb.valid && !mem_wb_committed;
-assign wb_commit = retire_commit && mem_wb.rf_wr_en;
-assign csr_commit = retire_commit && mem_wb.csr_wr_en;
+assign wb_commit = retire_commit && (mem_wb.retire_action == RETIRE_NORMAL) && mem_wb.rf_wr_en;
+assign csr_commit = retire_commit && (mem_wb.retire_action == RETIRE_NORMAL) && mem_wb.csr_wr_en;
+assign trap_commit = retire_commit && (mem_wb.retire_action == RETIRE_TRAP);
+assign mret_commit = retire_commit && (mem_wb.retire_action == RETIRE_MRET);
+assign instret_commit = retire_commit && (mem_wb.retire_action != RETIRE_TRAP);
 
 register_file u_register_file (
     .clk      (clk),
@@ -319,7 +346,12 @@ csr_file u_csr_file (
     .wr_en       (csr_commit),
     .wr_addr     (mem_wb.csr_addr),
     .wr_data     (mem_wb.csr_wr_data),
-    .instret_inc (retire_commit)
+    .instret_inc (instret_commit),
+    .trap_enter  (trap_commit),
+    .trap        (mem_wb.trap),
+    .mret_enter  (mret_commit),
+    .mtvec       (csr_mtvec),
+    .mepc        (csr_mepc)
 );
 
 always_comb begin
@@ -331,6 +363,16 @@ always_comb begin
     id_csr_old_data = ex_mem.csr_wr_data;
   end else if (mem_wb.valid && mem_wb.csr_wr_en && (mem_wb.csr_addr == id_csr_addr)) begin
     id_csr_old_data = mem_wb.csr_wr_data;
+  end
+end
+
+always_comb begin
+  id_trap = '0;
+
+  if (id_retire_action == RETIRE_TRAP) begin
+    id_trap.mepc = if_id_pc;
+    id_trap.mcause = {28'h0, id_trap_cause};
+    id_trap.mtval = (id_trap_cause == TRAP_CAUSE_ILLEGAL_INSTRUCTION) ? if_id_instruction : 32'h0;
   end
 end
 
@@ -360,12 +402,13 @@ end
 
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) id_ex <= '0;
+  else if (redirect_fire) id_ex <= '0;
   else if (memory_stall || fetch_stall) begin
     // Hold pipeline state while memory or instruction fetch is waiting.
   end
   else if (load_use_stall) id_ex <= '0;
   else begin
-    id_ex.valid            <= if_id_valid && !branch_redirect; // CONTROL HAZARD: ID/EX flush
+    id_ex.valid            <= if_id_valid && !redirect_fire; // CONTROL/TRAP HAZARD: ID/EX flush
     id_ex.pc               <= if_id_pc;
     id_ex.rs1_data         <= id_rs1_data;
     id_ex.rs2_data         <= id_rs2_data;
@@ -391,6 +434,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     id_ex.csr_op           <= id_csr_op;
     id_ex.csr_imm_sel      <= id_csr_imm_sel;
     id_ex.csr_old_data     <= id_csr_old_data;
+    id_ex.retire_action    <= id_retire_action;
+    id_ex.trap             <= id_trap;
     id_ex.fwd_a_sel        <= id_fwd_a_sel;
     id_ex.fwd_b_sel        <= id_fwd_b_sel;
     id_ex.load_from_memory <= (id_rf_wr_data_sel == WB_SRC_MEM);
@@ -479,13 +524,39 @@ assign ex_csr_wr_en = id_ex.csr_req &&
                       ((id_ex.csr_op == CSR_OP_RW) ||
                        ((id_ex.csr_op != CSR_OP_RW) && !ex_csr_src_zero));
 
+always_comb begin
+  ex_inst_addr_misaligned = (id_ex.pc_sel || ex_branch_taken) && (ex_branch_target[1:0] != 2'b00);
+  ex_load_store_misaligned = id_ex.dmem_req &&
+                             (((id_ex.dmem_size == HALF_WORD) && ex_alu_res[0]) ||
+                              ((id_ex.dmem_size == WORD) && (ex_alu_res[1:0] != 2'b00)));
+
+  ex_retire_action = id_ex.retire_action;
+  ex_trap = id_ex.trap;
+
+  if (id_ex.retire_action == RETIRE_NORMAL) begin
+    if (ex_inst_addr_misaligned) begin
+      ex_retire_action = RETIRE_TRAP;
+      ex_trap.mepc = id_ex.pc;
+      ex_trap.mcause = {28'h0, TRAP_CAUSE_INST_ADDR_MISALIGNED};
+      ex_trap.mtval = ex_branch_target;
+    end else if (ex_load_store_misaligned) begin
+      ex_retire_action = RETIRE_TRAP;
+      ex_trap.mepc = id_ex.pc;
+      ex_trap.mcause = {28'h0, id_ex.dmem_wr_en ? TRAP_CAUSE_STORE_ADDR_MISALIGNED :
+                                                 TRAP_CAUSE_LOAD_ADDR_MISALIGNED};
+      ex_trap.mtval = ex_alu_res;
+    end
+  end
+end
+
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) ex_mem <= '0;
+  else if (redirect_fire) ex_mem <= '0;
   else if (memory_stall || fetch_stall) begin
     // Hold active pipeline state until the stalled interface completes.
   end
   else begin
-    ex_mem.valid            <= id_ex.valid && !branch_redirect;
+    ex_mem.valid            <= id_ex.valid && !redirect_fire;
     ex_mem.alu_res          <= ex_alu_res;
     ex_mem.rs2_data         <= rs2_data_resolved;
     ex_mem.branch_target    <= ex_branch_target;
@@ -502,6 +573,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     ex_mem.csr_wr_en        <= ex_csr_wr_en;
     ex_mem.csr_addr         <= id_ex.csr_addr;
     ex_mem.csr_wr_data      <= ex_csr_wr_data;
+    ex_mem.retire_action    <= ex_retire_action;
+    ex_mem.trap             <= ex_trap;
   end
 end
 
@@ -510,7 +583,11 @@ end
 //   Side effects are gated with ex_mem.valid so bubbles do not issue
 //   platform memory or MMIO transactions.
 // --------------------------------------------------------
-assign dmem_req         = ex_mem.valid && ex_mem.dmem_req && !dmem_inflight && !dmem_done_q;
+assign dmem_req         = ex_mem.valid &&
+                          (ex_mem.retire_action == RETIRE_NORMAL) &&
+                          ex_mem.dmem_req &&
+                          !dmem_inflight &&
+                          !dmem_done_q;
 assign dmem_wr_en       = ex_mem.dmem_wr_en;
 assign dmem_data_size   = ex_mem.dmem_size;
 assign dmem_addr        = ex_mem.alu_res;
@@ -572,6 +649,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     mem_wb.csr_wr_en      <= ex_mem.csr_wr_en;
     mem_wb.csr_addr       <= ex_mem.csr_addr;
     mem_wb.csr_wr_data    <= ex_mem.csr_wr_data;
+    mem_wb.retire_action  <= ex_mem.retire_action;
+    mem_wb.trap           <= ex_mem.trap;
   end
 end
 

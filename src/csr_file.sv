@@ -1,3 +1,5 @@
+import risc_pkg::*;
+
 module csr_file (
   input  logic        clk,
   input  logic        reset_n,
@@ -9,7 +11,14 @@ module csr_file (
   input  logic [11:0] wr_addr,
   input  logic [31:0] wr_data,
 
-  input  logic        instret_inc
+  input  logic        instret_inc,
+
+  input  logic        trap_enter,
+  input  trap_payload_t trap,
+  input  logic        mret_enter,
+
+  output logic [31:0] mtvec,
+  output logic [31:0] mepc
 );
 
 localparam logic [11:0] CSR_MSTATUS  = 12'h300;
@@ -23,6 +32,12 @@ localparam logic [11:0] CSR_MIP      = 12'h344;
 localparam logic [11:0] CSR_MCYCLE   = 12'hb00;
 localparam logic [11:0] CSR_MINSTRET = 12'hb02;
 
+localparam int MSTATUS_MIE_BIT = 3;
+localparam int MSTATUS_MPIE_BIT = 7;
+localparam int MSTATUS_MPP_LSB = 11;
+localparam int MSTATUS_MPP_MSB = 12;
+localparam logic [1:0] PRIV_M = 2'b11;
+
 logic [31:0] mstatus_q;
 logic [31:0] mie_q;
 logic [31:0] mtvec_q;
@@ -33,6 +48,9 @@ logic [31:0] mtval_q;
 logic [31:0] mip_q;
 logic [31:0] mcycle_q;
 logic [31:0] minstret_q;
+
+assign mtvec = mtvec_q;
+assign mepc = mepc_q;
 
 always_comb begin
   unique case (rd_addr)
@@ -73,7 +91,18 @@ always_ff @(posedge clk or negedge reset_n) begin
       minstret_q <= minstret_q + 1'b1;
     end
 
-    if (wr_en) begin
+    if (trap_enter) begin
+      mepc_q <= trap.mepc;
+      mcause_q <= trap.mcause;
+      mtval_q <= trap.mtval;
+      mstatus_q[MSTATUS_MPIE_BIT] <= mstatus_q[MSTATUS_MIE_BIT];
+      mstatus_q[MSTATUS_MIE_BIT] <= 1'b0;
+      mstatus_q[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB] <= PRIV_M;
+    end else if (mret_enter) begin
+      mstatus_q[MSTATUS_MIE_BIT] <= mstatus_q[MSTATUS_MPIE_BIT];
+      mstatus_q[MSTATUS_MPIE_BIT] <= 1'b1;
+      mstatus_q[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB] <= PRIV_M;
+    end else if (wr_en) begin
       unique case (wr_addr)
         CSR_MSTATUS:  mstatus_q <= wr_data;
         CSR_MIE:      mie_q <= wr_data;

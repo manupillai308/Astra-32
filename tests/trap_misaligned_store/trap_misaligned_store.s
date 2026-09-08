@@ -1,0 +1,36 @@
+.section .text
+.globl _start
+_start:
+    lui     x30, 0x10000
+    lui     x1,  %hi(trap_handler)
+    addi    x1,  x1, %lo(trap_handler)
+    csrw    mtvec, x1
+
+    addi    x4, x0, 0x55
+    sw      x4, 2(x0)
+
+after_trap:
+    addi    x1, x0, 1
+    sw      x1, 0(x30)
+    jal     x0, hang
+
+trap_handler:
+    csrr    x2, mcause
+    addi    x3, x0, 6
+    bne     x2, x3, fail
+
+    csrr    x2, mtval
+    addi    x3, x0, 2
+    bne     x2, x3, fail
+
+    csrr    x2, mepc
+    addi    x2, x2, 4
+    csrw    mepc, x2
+    mret
+
+fail:
+    addi    x1, x0, 2
+    sw      x1, 0(x30)
+
+hang:
+    jal     x0, hang

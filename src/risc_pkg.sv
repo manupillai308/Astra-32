@@ -71,20 +71,20 @@ typedef enum logic [2:0] {
 
 
 // --------------------------------------------------------
-// R-Type Instructions (Funct7[5], Funct3)
+// R-Type Instructions (Funct7, Funct3)
 // --------------------------------------------------------
 
-typedef enum logic [3:0] { 
-  R_ADD = 4'h0,
-  R_SUB = 4'h8,
-  R_SLL = 4'h1,
-  R_SLT = 4'h2,
-  R_SLTU = 4'h3,
-  R_XOR = 4'h4,
-  R_SRL = 4'h5,
-  R_SRA = 4'hD,
-  R_OR = 4'h6,
-  R_AND = 4'h7
+typedef enum logic [9:0] {
+  R_ADD  = {7'b0000000, 3'b000},
+  R_SUB  = {7'b0100000, 3'b000},
+  R_SLL  = {7'b0000000, 3'b001},
+  R_SLT  = {7'b0000000, 3'b010},
+  R_SLTU = {7'b0000000, 3'b011},
+  R_XOR  = {7'b0000000, 3'b100},
+  R_SRL  = {7'b0000000, 3'b101},
+  R_SRA  = {7'b0100000, 3'b101},
+  R_OR   = {7'b0000000, 3'b110},
+  R_AND  = {7'b0000000, 3'b111}
  } r_type_instr_t;
 
 
@@ -141,6 +141,27 @@ typedef enum logic [1:0] {
     CSR_OP_RC = 2'b10
 } csr_op_t;
 
+typedef enum logic [3:0] {
+    TRAP_CAUSE_INST_ADDR_MISALIGNED  = 4'd0,
+    TRAP_CAUSE_ILLEGAL_INSTRUCTION   = 4'd2,
+    TRAP_CAUSE_BREAKPOINT            = 4'd3,
+    TRAP_CAUSE_LOAD_ADDR_MISALIGNED  = 4'd4,
+    TRAP_CAUSE_STORE_ADDR_MISALIGNED = 4'd6,
+    TRAP_CAUSE_ECALL_M               = 4'd11
+} trap_cause_t;
+
+typedef struct packed {
+    logic [31:0] mepc;
+    logic [31:0] mcause;
+    logic [31:0] mtval;
+} trap_payload_t;
+
+typedef enum logic [1:0] {
+    RETIRE_NORMAL = 2'b00,
+    RETIRE_TRAP   = 2'b01,
+    RETIRE_MRET   = 2'b10
+} retire_action_t;
+
 
 // --------------------------------------------------------
 // Control Signal Struct
@@ -159,6 +180,9 @@ typedef struct packed {
     logic      csr_req;             // CSR instruction
     csr_op_t   csr_op;              // RW/RS/RC operation
     logic      csr_imm_select;      // 1 = use zimm, 0 = use rs1 data
+
+    retire_action_t retire_action;  // Normal retire, trap entry, or mret
+    trap_cause_t trap_cause;        // Decode-stage exception cause
 
     logic      pc_src_select;       // 1 = branch/jump, 0 = sequential
 
@@ -217,6 +241,8 @@ typedef struct packed {
     csr_op_t     csr_op;
     logic        csr_imm_sel;
     logic [31:0] csr_old_data;
+    retire_action_t retire_action;
+    trap_payload_t trap;
     fwd_flag_t   fwd_a_sel;
     fwd_flag_t   fwd_b_sel;
     logic        load_from_memory;
@@ -244,6 +270,8 @@ typedef struct packed {
     logic        csr_wr_en;
     logic [11:0] csr_addr;
     logic [31:0] csr_wr_data;
+    retire_action_t retire_action;
+    trap_payload_t trap;
 } ex_mem_t;
 
 // MEM/WB: writeback inputs. dmem_rd_data is taken straight off the
@@ -256,6 +284,8 @@ typedef struct packed {
     logic        csr_wr_en;
     logic [11:0] csr_addr;
     logic [31:0] csr_wr_data;
+    retire_action_t retire_action;
+    trap_payload_t trap;
 } mem_wb_t;
 
 endpackage
