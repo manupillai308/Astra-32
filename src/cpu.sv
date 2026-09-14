@@ -163,9 +163,9 @@ assign memory_stall = ex_mem.valid &&
                       ex_mem.dmem_req &&
                       !memory_complete;
 assign memory_complete = dmem_rd_data_valid || dmem_done_q;
-assign fetch_stall = imem_pending_q || (imem_inflight_q && !imem_rd_data_valid);
+assign fetch_stall = fetch_enable || imem_pending_q || (imem_inflight_q && !imem_rd_data_valid);
 assign pipeline_stall = load_use_stall || memory_stall || fetch_stall;
-assign fetch_enable = !load_use_stall && !memory_stall &&
+assign fetch_enable = !branch_redirect && !load_use_stall && !memory_stall &&
                       !imem_pending_q && !imem_inflight_q && !imem_done_q;
 assign imem_fire = imem_req && imem_ready;
 
@@ -178,7 +178,7 @@ assign branch_redirect = ex_mem.valid &&
                          (ex_mem.branch_taken || ex_mem.pc_sel);
 assign trap_redirect = trap_commit;
 assign mret_redirect = mret_commit;
-assign redirect_fire = trap_redirect || mret_redirect || (branch_redirect && !memory_stall);
+assign redirect_fire = trap_redirect || mret_redirect || (branch_redirect && !memory_stall && !fetch_stall);
 assign redirect_target = trap_redirect ? csr_mtvec :
                          mret_redirect ? csr_mepc :
                          ex_mem.branch_target;
