@@ -61,6 +61,8 @@ logic        branch_redirect;
 logic        trap_redirect;
 logic        mret_redirect;
 logic        redirect_fire;
+logic        retire_squash_request;
+logic        retire_squash;
 logic [31:0] redirect_target;
 
 // IF/ID equivalent: pc piped one cycle to align with the
@@ -165,7 +167,7 @@ assign memory_stall = ex_mem.valid &&
 assign memory_complete = dmem_rd_data_valid || dmem_done_q;
 assign fetch_stall = fetch_enable || imem_pending_q || (imem_inflight_q && !imem_rd_data_valid);
 assign pipeline_stall = load_use_stall || memory_stall || fetch_stall;
-assign fetch_enable = !branch_redirect && !load_use_stall && !memory_stall &&
+assign fetch_enable = !retire_squash_request && !branch_redirect && !load_use_stall && !memory_stall &&
                       !imem_pending_q && !imem_inflight_q && !imem_done_q;
 assign imem_fire = imem_req && imem_ready;
 
@@ -182,6 +184,10 @@ assign redirect_fire = trap_redirect || mret_redirect || (branch_redirect && !me
 assign redirect_target = trap_redirect ? csr_mtvec :
                          mret_redirect ? csr_mepc :
                          ex_mem.branch_target;
+assign retire_squash_request = id_ex.valid &&
+                               ((ex_retire_action == RETIRE_TRAP) ||
+                                (ex_retire_action == RETIRE_MRET));
+assign retire_squash = retire_squash_request && !memory_stall && !fetch_stall;
 
 // --------------------------------------------------------
 // PC register
@@ -246,8 +252,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     if_id_valid <= 1'b0;
     if_id_pc    <= RESET_PC;
     if_id_instruction <= 32'h0;
-  end else if (redirect_fire) begin
-    // Defensive: squash any speculative fetch behind the branch.
+  end else if (redirect_fire || retire_squash) begin
+    // Defensive: squash any speculative fetch behind redirect/trap.
     // CONTROL HAZARD: IF/ID flush
     if_id_valid <= 1'b0;
   end else if (pipeline_stall) begin
@@ -402,7 +408,7 @@ end
 
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) id_ex <= '0;
-  else if (redirect_fire) id_ex <= '0;
+  else if (redirect_fire || retire_squash) id_ex <= '0;
   else if (memory_stall || fetch_stall) begin
     // Hold pipeline state while memory or instruction fetch is waiting.
   end
