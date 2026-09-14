@@ -184,9 +184,9 @@ assign redirect_fire = trap_redirect || mret_redirect || (branch_redirect && !me
 assign redirect_target = trap_redirect ? csr_mtvec :
                          mret_redirect ? csr_mepc :
                          ex_mem.branch_target;
-assign retire_squash_request = id_ex.valid &&
-                               ((ex_retire_action == RETIRE_TRAP) ||
-                                (ex_retire_action == RETIRE_MRET));
+assign retire_squash_request = ex_mem.valid &&
+                               ((ex_mem.retire_action == RETIRE_TRAP) ||
+                                (ex_mem.retire_action == RETIRE_MRET));
 assign retire_squash = retire_squash_request && !memory_stall && !fetch_stall;
 
 // --------------------------------------------------------
@@ -561,6 +561,7 @@ always_ff @(posedge clk or negedge reset_n) begin
   else if (memory_stall || fetch_stall) begin
     // Hold active pipeline state until the stalled interface completes.
   end
+  else if (retire_squash) ex_mem <= '0;
   else begin
     ex_mem.valid            <= id_ex.valid && !redirect_fire;
     ex_mem.alu_res          <= ex_alu_res;
