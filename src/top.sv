@@ -57,6 +57,7 @@ cpu #(
 ) u_cpu (
   .clk                 (clk),
   .reset_n             (reset_n),
+  .irq_pending         (32'h0),
   .imem_req            (cpu_imem_req),
   .imem_addr           (cpu_imem_addr),
   .imem_data           (cpu_imem_data),

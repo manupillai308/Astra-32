@@ -6,6 +6,7 @@ module bus_data_memory #(
   parameter ROM_ADDR_WIDTH = 12,
   parameter LED_WIDTH = 3,
   parameter ROM_BASE_ADDR = 32'h0,
+  parameter CLINT_BASE_ADDR = 32'h0200_0000,
   parameter LED_BASE_ADDR = 32'h1000_0000,
   parameter UART_BASE_ADDR = 32'h1000_0010,
   parameter int CLK_HZ = 12_000_000,
@@ -32,6 +33,8 @@ module bus_data_memory #(
   output logic                 cpu_dmem_rd_data_valid,
 
   output logic [LED_WIDTH-1:0] mmio_led,
+  output logic                 clint_msip,
+  output logic                 clint_mtip,
 
   input  logic                 uart_rx,
   output logic                 uart_tx
@@ -41,18 +44,23 @@ logic dmem_ram_sel;
 logic dmem_rom_sel;
 logic dmem_led_sel;
 logic dmem_uart_sel;
+logic dmem_clint_sel;
 logic ram_req;
 logic led_req;
 logic uart_req;
+logic clint_req;
 logic rom_req;
 logic dmem_mmio_accept;
 logic ram_busy;
 logic uart_busy;
+logic clint_busy;
+logic mmio_busy;
 logic dmem_accept;
 
 logic [31:0] ram_rd_data;
 logic [31:0] led_rd_data;
 logic [31:0] uart_rd_data;
+logic [31:0] clint_rd_data;
 logic [31:0] rom_rd_data;
 logic [31:0] ram_offset_addr;
 logic [31:0] imem_ram_offset_addr;
@@ -70,7 +78,8 @@ typedef enum logic [2:0] {
   DMEM_TARGET_RAM  = 3'b001,
   DMEM_TARGET_ROM  = 3'b010,
   DMEM_TARGET_LED  = 3'b011,
-  DMEM_TARGET_UART = 3'b100
+  DMEM_TARGET_UART = 3'b100,
+  DMEM_TARGET_CLINT = 3'b101
 } dmem_target_t;
 
 typedef enum logic [1:0] {
@@ -156,6 +165,8 @@ assign dmem_rom_wants = cpu_dmem_req && dmem_rom_sel;
 assign dmem_ram_sel = (cpu_dmem_addr >= RAM_BASE_ADDR) && (ram_offset_addr < RAM_SIZE_BYTES);
 assign dmem_led_sel = (cpu_dmem_addr == LED_BASE_ADDR);
 assign dmem_uart_sel = (cpu_dmem_addr[31:4] == UART_BASE_ADDR[31:4]);
+assign dmem_clint_sel = (cpu_dmem_addr >= CLINT_BASE_ADDR) &&
+                        (cpu_dmem_addr < (CLINT_BASE_ADDR + 32'h0001_0000));
 always_comb begin
   unique case (dmem_target)
     DMEM_TARGET_RAM:  cpu_dmem_ready = (ram_state_q == RAM_IDLE) &&
@@ -164,6 +175,7 @@ always_comb begin
                                        (rom_selected_owner == ROM_OWNER_DMEM);
     DMEM_TARGET_LED,
     DMEM_TARGET_UART,
+    DMEM_TARGET_CLINT,
     DMEM_TARGET_NONE: cpu_dmem_ready = (mmio_state_q == MMIO_IDLE);
     default:         cpu_dmem_ready = 1'b0;
   endcase
@@ -187,6 +199,7 @@ always_comb begin
     dmem_rom_sel: dmem_target = DMEM_TARGET_ROM;
     dmem_led_sel: dmem_target = DMEM_TARGET_LED;
     dmem_uart_sel: dmem_target = DMEM_TARGET_UART;
+    dmem_clint_sel: dmem_target = DMEM_TARGET_CLINT;
     default: dmem_target = DMEM_TARGET_NONE;
   endcase
 end
@@ -239,7 +252,16 @@ always_comb begin
   ram_req = (ram_state_q == RAM_ISSUE);
   led_req = (mmio_state_q == MMIO_ISSUE) && (mmio_target_q == DMEM_TARGET_LED);
   uart_req = (mmio_state_q == MMIO_ISSUE) && (mmio_target_q == DMEM_TARGET_UART);
+  clint_req = (mmio_state_q == MMIO_ISSUE) && (mmio_target_q == DMEM_TARGET_CLINT);
   rom_req = (rom_state_q == ROM_ISSUE) && !rom_wr_en_q;
+end
+
+always_comb begin
+  unique case (mmio_target_q)
+    DMEM_TARGET_UART:  mmio_busy = uart_busy;
+    DMEM_TARGET_CLINT: mmio_busy = clint_busy;
+    default:           mmio_busy = 1'b0;
+  endcase
 end
 
 always_ff @(posedge clk or negedge reset_n) begin
@@ -282,7 +304,7 @@ always_ff @(posedge clk or negedge reset_n) begin
         end
 
         MMIO_WAIT: begin
-          if (!uart_busy) begin
+          if (!mmio_busy) begin
             mmio_state_q <= MMIO_DONE;
           end
         end
@@ -379,6 +401,7 @@ always_comb begin
       DMEM_TARGET_RAM:  cpu_dmem_rd_data = ram_rd_data;
       DMEM_TARGET_LED:  cpu_dmem_rd_data = led_rd_data;
       DMEM_TARGET_UART: cpu_dmem_rd_data = uart_rd_data;
+      DMEM_TARGET_CLINT: cpu_dmem_rd_data = clint_rd_data;
       default:          cpu_dmem_rd_data = 32'h0;
     endcase
   end
@@ -426,6 +449,21 @@ mmio_uart #(
   .busy(uart_busy),
   .uart_rx(uart_rx),
   .uart_tx(uart_tx)
+);
+
+clint #(
+  .BASE_ADDR(CLINT_BASE_ADDR)
+) u_clint (
+  .clk     (clk),
+  .reset_n (reset_n),
+  .req     (clint_req),
+  .wr_en   (mmio_wr_en_q),
+  .addr    (mmio_addr_q),
+  .wr_data (mmio_wr_data_q),
+  .rd_data (clint_rd_data),
+  .busy    (clint_busy),
+  .msip    (clint_msip),
+  .mtip    (clint_mtip)
 );
 
 rom_memory #(

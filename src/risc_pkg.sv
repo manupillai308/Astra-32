@@ -150,6 +150,12 @@ typedef enum logic [3:0] {
     TRAP_CAUSE_ECALL_M               = 4'd11
 } trap_cause_t;
 
+typedef enum logic [4:0] {
+    IRQ_CAUSE_MSI = 5'd3,
+    IRQ_CAUSE_MTI = 5'd7,
+    IRQ_CAUSE_MEI = 5'd11
+} interrupt_cause_t;
+
 typedef struct packed {
     logic [31:0] mepc;
     logic [31:0] mcause;

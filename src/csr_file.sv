@@ -13,6 +13,10 @@ module csr_file (
 
   input  logic        instret_inc,
 
+  input  logic [31:0] irq_pending,
+  output logic        irq_valid,
+  output interrupt_cause_t irq_cause,
+
   input  logic        trap_enter,
   input  trap_payload_t trap,
   input  logic        mret_enter,
@@ -37,6 +41,10 @@ localparam int MSTATUS_MPIE_BIT = 7;
 localparam int MSTATUS_MPP_LSB = 11;
 localparam int MSTATUS_MPP_MSB = 12;
 localparam logic [1:0] PRIV_M = 2'b11;
+localparam logic [31:0] SUPPORTED_IRQ_MASK =
+    (32'h1 << IRQ_CAUSE_MSI) |
+    (32'h1 << IRQ_CAUSE_MTI) |
+    (32'h1 << IRQ_CAUSE_MEI);
 
 logic [31:0] mstatus_q;
 logic [31:0] mie_q;
@@ -45,12 +53,28 @@ logic [31:0] mscratch_q;
 logic [31:0] mepc_q;
 logic [31:0] mcause_q;
 logic [31:0] mtval_q;
-logic [31:0] mip_q;
 logic [31:0] mcycle_q;
 logic [31:0] minstret_q;
+logic [31:0] mip_value;
+logic [31:0] enabled_pending;
 
 assign mtvec = mtvec_q;
 assign mepc = mepc_q;
+assign mip_value = irq_pending & SUPPORTED_IRQ_MASK;
+assign enabled_pending = mip_value & mie_q;
+assign irq_valid = mstatus_q[MSTATUS_MIE_BIT] && (enabled_pending != 32'h0);
+
+always_comb begin
+  irq_cause = IRQ_CAUSE_MSI;
+
+  if (enabled_pending[IRQ_CAUSE_MEI]) begin
+    irq_cause = IRQ_CAUSE_MEI;
+  end else if (enabled_pending[IRQ_CAUSE_MSI]) begin
+    irq_cause = IRQ_CAUSE_MSI;
+  end else if (enabled_pending[IRQ_CAUSE_MTI]) begin
+    irq_cause = IRQ_CAUSE_MTI;
+  end
+end
 
 always_comb begin
   unique case (rd_addr)
@@ -61,14 +85,18 @@ always_comb begin
     CSR_MEPC:     rd_data = mepc_q;
     CSR_MCAUSE:   rd_data = mcause_q;
     CSR_MTVAL:    rd_data = mtval_q;
-    CSR_MIP:      rd_data = mip_q;
+    CSR_MIP:      rd_data = mip_value;
     CSR_MCYCLE:   rd_data = mcycle_q;
     CSR_MINSTRET: rd_data = minstret_q;
     default:      rd_data = 32'h0;
   endcase
 
   if (wr_en && (wr_addr == rd_addr)) begin
-    rd_data = wr_data;
+    unique case (rd_addr)
+      CSR_MIE: rd_data = wr_data & SUPPORTED_IRQ_MASK;
+      CSR_MIP: rd_data = mip_value;
+      default: rd_data = wr_data;
+    endcase
   end
 end
 
@@ -81,7 +109,6 @@ always_ff @(posedge clk or negedge reset_n) begin
     mepc_q <= 32'h0;
     mcause_q <= 32'h0;
     mtval_q <= 32'h0;
-    mip_q <= 32'h0;
     mcycle_q <= 32'h0;
     minstret_q <= 32'h0;
   end else begin
@@ -105,13 +132,14 @@ always_ff @(posedge clk or negedge reset_n) begin
     end else if (wr_en) begin
       unique case (wr_addr)
         CSR_MSTATUS:  mstatus_q <= wr_data;
-        CSR_MIE:      mie_q <= wr_data;
+        CSR_MIE:      mie_q <= wr_data & SUPPORTED_IRQ_MASK;
         CSR_MTVEC:    mtvec_q <= wr_data;
         CSR_MSCRATCH: mscratch_q <= wr_data;
         CSR_MEPC:     mepc_q <= wr_data;
         CSR_MCAUSE:   mcause_q <= wr_data;
         CSR_MTVAL:    mtval_q <= wr_data;
-        CSR_MIP:      mip_q <= wr_data;
+        CSR_MIP: begin
+        end
         CSR_MCYCLE:   mcycle_q <= wr_data;
         CSR_MINSTRET: minstret_q <= wr_data;
         default: begin

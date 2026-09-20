@@ -23,6 +23,7 @@ module cpu #(
 )(
   input logic clk,
   input logic reset_n,
+  input logic [31:0] irq_pending,
 
   output logic        imem_req,
   output logic [31:0] imem_addr,
@@ -60,6 +61,9 @@ logic        pipeline_stall;
 logic        branch_redirect;
 logic        trap_redirect;
 logic        mret_redirect;
+logic        interrupt_request;
+logic        interrupt_take;
+logic        branch_redirect_fire;
 logic        redirect_fire;
 logic        retire_squash_request;
 logic        retire_squash;
@@ -152,6 +156,13 @@ logic        ex_load_store_misaligned;
 logic        ex_inst_addr_misaligned;
 logic [31:0] csr_mtvec;
 logic [31:0] csr_mepc;
+logic        irq_valid;
+interrupt_cause_t irq_cause;
+logic [31:0] interrupt_mepc;
+logic [31:0] trap_vector;
+logic [31:0] interrupt_vector;
+trap_payload_t interrupt_trap;
+trap_payload_t csr_trap;
 // --------------------------------------------------------
 // Fetch gate
 //   Empty front-half => safe to fetch. mem_wb.valid is NOT
@@ -167,7 +178,8 @@ assign memory_stall = ex_mem.valid &&
 assign memory_complete = dmem_rd_data_valid || dmem_done_q;
 assign fetch_stall = fetch_enable || imem_pending_q || (imem_inflight_q && !imem_rd_data_valid);
 assign pipeline_stall = load_use_stall || memory_stall || fetch_stall;
-assign fetch_enable = !retire_squash_request && !branch_redirect && !load_use_stall && !memory_stall &&
+assign fetch_enable = !interrupt_request && !retire_squash_request && !branch_redirect &&
+                      !load_use_stall && !memory_stall &&
                       !imem_pending_q && !imem_inflight_q && !imem_done_q;
 assign imem_fire = imem_req && imem_ready;
 
@@ -180,14 +192,45 @@ assign branch_redirect = ex_mem.valid &&
                          (ex_mem.branch_taken || ex_mem.pc_sel);
 assign trap_redirect = trap_commit;
 assign mret_redirect = mret_commit;
-assign redirect_fire = trap_redirect || mret_redirect || (branch_redirect && !memory_stall && !fetch_stall);
-assign redirect_target = trap_redirect ? csr_mtvec :
+assign interrupt_request = irq_valid &&
+                           !trap_commit &&
+                           !mret_commit &&
+                           !csr_commit &&
+                           !memory_stall &&
+                           (!ex_mem.valid || (ex_mem.retire_action == RETIRE_NORMAL));
+assign interrupt_take = interrupt_request && !fetch_stall;
+assign branch_redirect_fire = branch_redirect && !memory_stall && !fetch_stall;
+assign redirect_fire = trap_redirect || mret_redirect || interrupt_take || branch_redirect_fire;
+assign trap_vector = {csr_mtvec[31:2], 2'b00};
+assign interrupt_vector = (csr_mtvec[1:0] == 2'b01) ?
+                          trap_vector + ({27'h0, irq_cause} << 2) :
+                          trap_vector;
+assign redirect_target = trap_redirect ? trap_vector :
                          mret_redirect ? csr_mepc :
+                         interrupt_take ? interrupt_vector :
                          ex_mem.branch_target;
 assign retire_squash_request = ex_mem.valid &&
                                ((ex_mem.retire_action == RETIRE_TRAP) ||
                                 (ex_mem.retire_action == RETIRE_MRET));
 assign retire_squash = retire_squash_request && !memory_stall && !fetch_stall;
+
+always_comb begin
+  if (branch_redirect) begin
+    interrupt_mepc = ex_mem.branch_target;
+  end else if (id_ex.valid) begin
+    interrupt_mepc = id_ex.pc;
+  end else if (if_id_valid) begin
+    interrupt_mepc = if_id_pc;
+  end else begin
+    interrupt_mepc = pc;
+  end
+
+  interrupt_trap.mepc = interrupt_mepc;
+  interrupt_trap.mcause = {1'b1, 26'h0, irq_cause};
+  interrupt_trap.mtval = 32'h0;
+
+  csr_trap = interrupt_take ? interrupt_trap : mem_wb.trap;
+end
 
 // --------------------------------------------------------
 // PC register
@@ -353,8 +396,11 @@ csr_file u_csr_file (
     .wr_addr     (mem_wb.csr_addr),
     .wr_data     (mem_wb.csr_wr_data),
     .instret_inc (instret_commit),
-    .trap_enter  (trap_commit),
-    .trap        (mem_wb.trap),
+    .irq_pending (irq_pending),
+    .irq_valid   (irq_valid),
+    .irq_cause   (irq_cause),
+    .trap_enter  (trap_commit || interrupt_take),
+    .trap        (csr_trap),
     .mret_enter  (mret_commit),
     .mtvec       (csr_mtvec),
     .mepc        (csr_mepc)
