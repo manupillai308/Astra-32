@@ -105,8 +105,6 @@ logic        id_rf_wr_en;
 logic        id_uses_rs1, id_uses_rs2;
 logic        id_csr_req, id_csr_imm_sel;
 csr_op_t     id_csr_op;
-logic [31:0] id_csr_rd_data;
-logic [31:0] id_csr_old_data;
 retire_action_t id_retire_action;
 trap_cause_t id_trap_cause;
 trap_payload_t id_trap;
@@ -147,6 +145,8 @@ logic [31:0] rs1_data_resolved;
 logic [31:0] rs2_data_resolved;
 logic [31:0] ex_mem_forward_data;
 logic [31:0] ex_csr_src_data;
+logic [31:0] ex_csr_rd_data;
+logic [31:0] ex_csr_old_data;
 logic [31:0] ex_csr_wr_data;
 logic        ex_csr_src_zero;
 logic        ex_csr_wr_en;
@@ -390,8 +390,8 @@ register_file u_register_file (
 csr_file u_csr_file (
     .clk         (clk),
     .reset_n     (reset_n),
-    .rd_addr     (id_csr_addr),
-    .rd_data     (id_csr_rd_data),
+    .rd_addr     (id_ex.csr_addr),
+    .rd_data     (ex_csr_rd_data),
     .wr_en       (csr_commit),
     .wr_addr     (mem_wb.csr_addr),
     .wr_data     (mem_wb.csr_wr_data),
@@ -407,14 +407,19 @@ csr_file u_csr_file (
 );
 
 always_comb begin
-  id_csr_old_data = id_csr_rd_data;
+  ex_csr_old_data = ex_csr_rd_data;
 
-  if (id_ex.valid && ex_csr_wr_en && (id_ex.csr_addr == id_csr_addr)) begin
-    id_csr_old_data = ex_csr_wr_data;
-  end else if (ex_mem.valid && ex_mem.csr_wr_en && (ex_mem.csr_addr == id_csr_addr)) begin
-    id_csr_old_data = ex_mem.csr_wr_data;
-  end else if (mem_wb.valid && mem_wb.csr_wr_en && (mem_wb.csr_addr == id_csr_addr)) begin
-    id_csr_old_data = mem_wb.csr_wr_data;
+  if (ex_mem.valid &&
+      (ex_mem.retire_action == RETIRE_NORMAL) &&
+      ex_mem.csr_wr_en &&
+      (ex_mem.csr_addr == id_ex.csr_addr)) begin
+    ex_csr_old_data = ex_mem.csr_wr_data;
+  end else if (mem_wb.valid &&
+               !mem_wb_committed &&
+               (mem_wb.retire_action == RETIRE_NORMAL) &&
+               mem_wb.csr_wr_en &&
+               (mem_wb.csr_addr == id_ex.csr_addr)) begin
+    ex_csr_old_data = mem_wb.csr_wr_data;
   end
 end
 
@@ -485,7 +490,6 @@ always_ff @(posedge clk or negedge reset_n) begin
     id_ex.csr_addr         <= id_csr_addr;
     id_ex.csr_op           <= id_csr_op;
     id_ex.csr_imm_sel      <= id_csr_imm_sel;
-    id_ex.csr_old_data     <= id_csr_old_data;
     id_ex.retire_action    <= id_retire_action;
     id_ex.trap             <= id_trap;
     id_ex.fwd_a_sel        <= id_fwd_a_sel;
@@ -555,7 +559,7 @@ always_comb begin
     WB_SRC_ALU: ex_mem_forward_data = ex_alu_res;
     WB_SRC_IMM: ex_mem_forward_data = id_ex.immediate;
     WB_SRC_PC:  ex_mem_forward_data = ex_next_seq_pc;
-    WB_SRC_CSR: ex_mem_forward_data = id_ex.csr_old_data;
+    WB_SRC_CSR: ex_mem_forward_data = ex_csr_old_data;
     default:    ex_mem_forward_data = 32'h0;
   endcase
 end
@@ -566,8 +570,8 @@ assign ex_csr_src_zero = (id_ex.rs1_addr == 5'h0);
 always_comb begin
   unique case (id_ex.csr_op)
     CSR_OP_RW: ex_csr_wr_data = ex_csr_src_data;
-    CSR_OP_RS: ex_csr_wr_data = id_ex.csr_old_data | ex_csr_src_data;
-    CSR_OP_RC: ex_csr_wr_data = id_ex.csr_old_data & ~ex_csr_src_data;
+    CSR_OP_RS: ex_csr_wr_data = ex_csr_old_data | ex_csr_src_data;
+    CSR_OP_RC: ex_csr_wr_data = ex_csr_old_data & ~ex_csr_src_data;
     default:   ex_csr_wr_data = ex_csr_src_data;
   endcase
 end

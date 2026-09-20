@@ -246,7 +246,6 @@ typedef struct packed {
     logic [11:0] csr_addr;
     csr_op_t     csr_op;
     logic        csr_imm_sel;
-    logic [31:0] csr_old_data;
     retire_action_t retire_action;
     trap_payload_t trap;
     fwd_flag_t   fwd_a_sel;
