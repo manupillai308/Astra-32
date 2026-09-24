@@ -65,7 +65,8 @@ module test_bench_data_memory();
     end
 
     if (reset_n && mmio_led == TEST_FAIL_LED) begin
-      $display("[FAIL] fail LED detected at cycle %0d", cycle_count);
+      $display("[FAIL] fail LED detected at cycle %0d (test code %0d)",
+               cycle_count, dut.u_cpu.u_register_file.regs[31]);
       $finish;
     end
 
