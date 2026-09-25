@@ -68,6 +68,21 @@ logic        redirect_fire;
 logic        retire_squash_request;
 logic        retire_squash;
 logic [31:0] redirect_target;
+logic        retire_barrier_resume_redirect;
+
+typedef enum logic [1:0] {
+  RETIRE_BARRIER_IDLE,
+  RETIRE_BARRIER_DRAIN,
+  RETIRE_BARRIER_RECHECK
+} retire_barrier_state_t;
+
+retire_barrier_state_t  retire_barrier_state_q;
+retire_barrier_action_t retire_barrier_action_q;
+retire_barrier_action_t ex_retire_barrier_action;
+logic                   retire_barrier_active;
+logic                   retire_barrier_start;
+logic                   retire_barrier_commit;
+logic [31:0]            retire_barrier_resume_pc_q;
 
 // IF/ID equivalent: pc piped one cycle to align with the
 // sync imem output reg, which acts as IF/ID.instruction.
@@ -180,8 +195,31 @@ assign fetch_stall = fetch_enable || imem_pending_q || (imem_inflight_q && !imem
 assign pipeline_stall = load_use_stall || memory_stall || fetch_stall;
 assign fetch_enable = !interrupt_request && !retire_squash_request && !branch_redirect &&
                       !load_use_stall && !memory_stall &&
+                      !retire_barrier_active &&
+                      (ex_retire_barrier_action == RETIRE_BARRIER_NONE) &&
                       !imem_pending_q && !imem_inflight_q && !imem_done_q;
 assign imem_fire = imem_req && imem_ready;
+
+always_comb begin
+  ex_retire_barrier_action = RETIRE_BARRIER_NONE;
+
+  if (id_ex.valid && (ex_retire_action == RETIRE_MRET)) begin
+    ex_retire_barrier_action = RETIRE_BARRIER_TRAP_RETURN;
+  end else if (id_ex.valid &&
+               (ex_retire_action == RETIRE_NORMAL) &&
+               ex_csr_wr_en) begin
+    ex_retire_barrier_action = RETIRE_BARRIER_INTERRUPT_RECHECK;
+  end
+end
+
+assign retire_barrier_active = (retire_barrier_state_q != RETIRE_BARRIER_IDLE);
+assign retire_barrier_start = (retire_barrier_state_q == RETIRE_BARRIER_IDLE) &&
+                              (ex_retire_barrier_action != RETIRE_BARRIER_NONE) &&
+                              !redirect_fire && !retire_squash &&
+                              !memory_stall && !fetch_stall;
+assign retire_barrier_commit = (retire_barrier_state_q == RETIRE_BARRIER_DRAIN) &&
+                               (((retire_barrier_action_q == RETIRE_BARRIER_TRAP_RETURN) && mret_commit) ||
+                                ((retire_barrier_action_q == RETIRE_BARRIER_INTERRUPT_RECHECK) && csr_commit));
 
 // --------------------------------------------------------
 // Branch / jump redirect
@@ -191,8 +229,10 @@ assign branch_redirect = ex_mem.valid &&
                          (ex_mem.retire_action == RETIRE_NORMAL) &&
                          (ex_mem.branch_taken || ex_mem.pc_sel);
 assign trap_redirect = trap_commit;
-assign mret_redirect = mret_commit;
+assign mret_redirect = mret_commit && !retire_barrier_active;
 assign interrupt_request = irq_valid &&
+                           (!retire_barrier_active ||
+                            (retire_barrier_state_q == RETIRE_BARRIER_RECHECK)) &&
                            !trap_commit &&
                            !mret_commit &&
                            !csr_commit &&
@@ -200,7 +240,10 @@ assign interrupt_request = irq_valid &&
                            (!ex_mem.valid || (ex_mem.retire_action == RETIRE_NORMAL));
 assign interrupt_take = interrupt_request && !fetch_stall;
 assign branch_redirect_fire = branch_redirect && !memory_stall && !fetch_stall;
-assign redirect_fire = trap_redirect || mret_redirect || interrupt_take || branch_redirect_fire;
+assign retire_barrier_resume_redirect =
+    (retire_barrier_state_q == RETIRE_BARRIER_RECHECK) && !irq_valid;
+assign redirect_fire = trap_redirect || mret_redirect || interrupt_take ||
+                       retire_barrier_resume_redirect || branch_redirect_fire;
 assign trap_vector = {csr_mtvec[31:2], 2'b00};
 assign interrupt_vector = (csr_mtvec[1:0] == 2'b01) ?
                           trap_vector + ({27'h0, irq_cause} << 2) :
@@ -208,6 +251,7 @@ assign interrupt_vector = (csr_mtvec[1:0] == 2'b01) ?
 assign redirect_target = trap_redirect ? trap_vector :
                          mret_redirect ? csr_mepc :
                          interrupt_take ? interrupt_vector :
+                         retire_barrier_resume_redirect ? retire_barrier_resume_pc_q :
                          ex_mem.branch_target;
 assign retire_squash_request = ex_mem.valid &&
                                ((ex_mem.retire_action == RETIRE_TRAP) ||
@@ -215,7 +259,9 @@ assign retire_squash_request = ex_mem.valid &&
 assign retire_squash = retire_squash_request && !memory_stall && !fetch_stall;
 
 always_comb begin
-  if (branch_redirect) begin
+  if (retire_barrier_state_q == RETIRE_BARRIER_RECHECK) begin
+    interrupt_mepc = retire_barrier_resume_pc_q;
+  end else if (branch_redirect) begin
     interrupt_mepc = ex_mem.branch_target;
   end else if (id_ex.valid) begin
     interrupt_mepc = id_ex.pc;
@@ -240,7 +286,45 @@ end
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n)                 pc <= RESET_PC;
   else if (redirect_fire)       pc <= redirect_target;
-  else if (imem_rd_data_valid)  pc <= imem_req_pc_q + 32'd4;
+  else if (!retire_barrier_active && !retire_barrier_start && imem_rd_data_valid)
+                                  pc <= imem_req_pc_q + 32'd4;
+end
+
+always_ff @(posedge clk or negedge reset_n) begin
+  if (!reset_n) begin
+    retire_barrier_state_q <= RETIRE_BARRIER_IDLE;
+    retire_barrier_action_q <= RETIRE_BARRIER_NONE;
+    retire_barrier_resume_pc_q <= RESET_PC;
+  end else begin
+    unique case (retire_barrier_state_q)
+      RETIRE_BARRIER_IDLE: begin
+        if (retire_barrier_start) begin
+          retire_barrier_state_q <= RETIRE_BARRIER_DRAIN;
+          retire_barrier_action_q <= ex_retire_barrier_action;
+          retire_barrier_resume_pc_q <= ex_next_seq_pc;
+        end
+      end
+
+      RETIRE_BARRIER_DRAIN: begin
+        if (retire_barrier_commit) begin
+          retire_barrier_state_q <= RETIRE_BARRIER_RECHECK;
+          if (retire_barrier_action_q == RETIRE_BARRIER_TRAP_RETURN) begin
+            retire_barrier_resume_pc_q <= csr_mepc;
+          end
+        end
+      end
+
+      RETIRE_BARRIER_RECHECK: begin
+        retire_barrier_state_q <= RETIRE_BARRIER_IDLE;
+        retire_barrier_action_q <= RETIRE_BARRIER_NONE;
+      end
+
+      default: begin
+        retire_barrier_state_q <= RETIRE_BARRIER_IDLE;
+        retire_barrier_action_q <= RETIRE_BARRIER_NONE;
+      end
+    endcase
+  end
 end
 
 // --------------------------------------------------------
@@ -265,6 +349,12 @@ always_ff @(posedge clk or negedge reset_n) begin
     imem_inflight_q <= 1'b0;
     imem_done_q <= 1'b0;
     imem_req_pc_q <= redirect_target;
+  end else if (retire_barrier_start || retire_barrier_active) begin
+    // Discard all fetch state younger than the barrier instruction.
+    imem_pending_q <= 1'b0;
+    imem_inflight_q <= 1'b0;
+    imem_done_q <= 1'b0;
+    imem_req_pc_q <= retire_barrier_start ? ex_next_seq_pc : retire_barrier_resume_pc_q;
   end else begin
     if (fetch_enable) begin
       imem_pending_q <= 1'b1;
@@ -295,7 +385,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     if_id_valid <= 1'b0;
     if_id_pc    <= RESET_PC;
     if_id_instruction <= 32'h0;
-  end else if (redirect_fire || retire_squash) begin
+  end else if (redirect_fire || retire_squash ||
+               retire_barrier_start || retire_barrier_active) begin
     // Defensive: squash any speculative fetch behind redirect/trap.
     // CONTROL HAZARD: IF/ID flush
     if_id_valid <= 1'b0;
@@ -463,6 +554,7 @@ always_ff @(posedge clk or negedge reset_n) begin
   else if (memory_stall || fetch_stall) begin
     // Hold pipeline state while memory or instruction fetch is waiting.
   end
+  else if (retire_barrier_start || retire_barrier_active) id_ex <= '0;
   else if (load_use_stall) id_ex <= '0;
   else begin
     id_ex.valid            <= if_id_valid && !redirect_fire; // CONTROL/TRAP HAZARD: ID/EX flush

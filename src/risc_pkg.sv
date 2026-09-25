@@ -168,6 +168,12 @@ typedef enum logic [1:0] {
     RETIRE_MRET   = 2'b10
 } retire_action_t;
 
+typedef enum logic [1:0] {
+    RETIRE_BARRIER_NONE              = 2'b00,
+    RETIRE_BARRIER_TRAP_RETURN       = 2'b01,
+    RETIRE_BARRIER_INTERRUPT_RECHECK = 2'b10
+} retire_barrier_action_t;
+
 
 // --------------------------------------------------------
 // Control Signal Struct
