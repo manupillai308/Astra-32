@@ -7,6 +7,7 @@ module top #(
   parameter ROM_ADDR_WIDTH = 12,
   parameter LED_WIDTH = 3,
   parameter ROM_BASE_ADDR = 32'h0,
+  parameter CLINT_BASE_ADDR = 32'h0200_0000,
   parameter LED_BASE_ADDR = 32'h1000_0000,
   parameter UART_BASE_ADDR = 32'h1000_0010,
   parameter int CLK_HZ = 12_000_000,
@@ -51,13 +52,22 @@ logic        cpu_dmem_zero_extend;
 logic [31:0] cpu_dmem_rd_data;
 logic        cpu_dmem_ready;
 logic        cpu_dmem_rd_data_valid;
+logic        clint_msip;
+logic        clint_mtip;
+logic [31:0] irq_pending;
+
+always_comb begin
+  irq_pending = 32'h0;
+  irq_pending[IRQ_CAUSE_MSI] = clint_msip;
+  irq_pending[IRQ_CAUSE_MTI] = clint_mtip;
+end
 
 cpu #(
   .RESET_PC(RESET_PC)
 ) u_cpu (
   .clk                 (clk),
   .reset_n             (reset_n),
-  .irq_pending         (32'h0),
+  .irq_pending         (irq_pending),
   .imem_req            (cpu_imem_req),
   .imem_addr           (cpu_imem_addr),
   .imem_data           (cpu_imem_data),
@@ -80,6 +90,7 @@ bus #(
   .ROM_ADDR_WIDTH (ROM_ADDR_WIDTH),
   .LED_WIDTH      (LED_WIDTH),
   .ROM_BASE_ADDR  (ROM_BASE_ADDR),
+  .CLINT_BASE_ADDR(CLINT_BASE_ADDR),
   .LED_BASE_ADDR  (LED_BASE_ADDR),
   .UART_BASE_ADDR (UART_BASE_ADDR),
   .CLK_HZ         (CLK_HZ),
@@ -104,6 +115,8 @@ bus #(
   .cpu_dmem_ready        (cpu_dmem_ready),
   .cpu_dmem_rd_data_valid(cpu_dmem_rd_data_valid),
   .mmio_led              (mmio_led),
+  .clint_msip            (clint_msip),
+  .clint_mtip            (clint_mtip),
   .uart_rx               (uart_rx),
   .uart_tx               (uart_tx),
   .app_addr              (app_addr),

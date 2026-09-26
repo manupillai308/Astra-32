@@ -203,10 +203,10 @@ assign imem_fire = imem_req && imem_ready;
 always_comb begin
   ex_retire_barrier_action = RETIRE_BARRIER_NONE;
 
-  if (id_ex.valid && (ex_retire_action == RETIRE_MRET)) begin
+  if (id_ex.valid && (id_ex.retire_action == RETIRE_MRET)) begin
     ex_retire_barrier_action = RETIRE_BARRIER_TRAP_RETURN;
   end else if (id_ex.valid &&
-               (ex_retire_action == RETIRE_NORMAL) &&
+               (id_ex.retire_action == RETIRE_NORMAL) &&
                ex_csr_wr_en) begin
     ex_retire_barrier_action = RETIRE_BARRIER_INTERRUPT_RECHECK;
   end
