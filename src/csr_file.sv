@@ -6,6 +6,8 @@ module csr_file (
 
   input  logic [11:0] rd_addr,
   output logic [31:0] rd_data,
+  input  logic        access_wr_en,
+  output logic        access_illegal,
 
   input  logic        wr_en,
   input  logic [11:0] wr_addr,
@@ -20,9 +22,12 @@ module csr_file (
   input  logic        trap_enter,
   input  trap_payload_t trap,
   input  logic        mret_enter,
+  input  logic        sret_enter,
 
   output logic [31:0] mtvec,
-  output logic [31:0] mepc
+  output logic [31:0] mepc,
+  output logic [31:0] sepc,
+  output privilege_mode_t current_privilege
 );
 
 localparam logic [11:0] CSR_MSTATUS  = 12'h300;
@@ -57,7 +62,6 @@ localparam int MSTATUS_MPP_LSB = 11;
 localparam int MSTATUS_MPP_MSB = 12;
 localparam int MSTATUS_SUM_BIT = 18;
 localparam int MSTATUS_MXR_BIT = 19;
-localparam logic [1:0] PRIV_M = 2'b11;
 localparam logic [31:0] SSTATUS_MASK =
     (32'h1 << MSTATUS_SIE_BIT) |
     (32'h1 << MSTATUS_SPIE_BIT) |
@@ -104,15 +108,36 @@ logic [31:0] sstatus_value;
 logic [31:0] sie_value;
 logic [31:0] sip_value;
 logic [31:0] enabled_pending;
+logic        csr_implemented;
+privilege_mode_t current_privilege_q;
 
 assign mtvec = mtvec_q;
 assign mepc = mepc_q;
+assign sepc = sepc_q;
+assign current_privilege = current_privilege_q;
 assign mip_value = irq_pending & SUPPORTED_IRQ_MASK;
 assign sstatus_value = mstatus_q & SSTATUS_MASK;
 assign sie_value = mie_q & mideleg_q & SUPERVISOR_IRQ_MASK;
 assign sip_value = mip_value & mideleg_q & SUPERVISOR_IRQ_MASK;
 assign enabled_pending = mip_value & mie_q;
-assign irq_valid = mstatus_q[MSTATUS_MIE_BIT] && (enabled_pending != 32'h0);
+assign irq_valid = ((current_privilege_q != PRIVILEGE_M) || mstatus_q[MSTATUS_MIE_BIT]) &&
+                   (enabled_pending != 32'h0);
+
+always_comb begin
+  unique case (rd_addr)
+    CSR_SSTATUS, CSR_SIE, CSR_STVEC, CSR_SSCRATCH, CSR_SEPC,
+    CSR_SCAUSE, CSR_STVAL, CSR_SIP, CSR_SATP,
+    CSR_MSTATUS, CSR_MEDELEG, CSR_MIDELEG, CSR_MIE, CSR_MTVEC,
+    CSR_MSCRATCH, CSR_MEPC, CSR_MCAUSE, CSR_MTVAL, CSR_MIP,
+    CSR_MCYCLE, CSR_MINSTRET: csr_implemented = 1'b1;
+    default:                  csr_implemented = 1'b0;
+  endcase
+
+  access_illegal = !csr_implemented ||
+                   (rd_addr[9:8] == 2'b10) ||
+                   (rd_addr[9:8] > current_privilege_q) ||
+                   (access_wr_en && (rd_addr[11:10] == 2'b11));
+end
 
 always_comb begin
   irq_cause = IRQ_CAUSE_MSI;
@@ -191,6 +216,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     sepc_q <= 32'h0;
     scause_q <= 32'h0;
     stval_q <= 32'h0;
+    current_privilege_q <= PRIVILEGE_M;
   end else begin
     mcycle_q <= mcycle_q + 1'b1;
 
@@ -204,11 +230,22 @@ always_ff @(posedge clk or negedge reset_n) begin
       mtval_q <= trap.mtval;
       mstatus_q[MSTATUS_MPIE_BIT] <= mstatus_q[MSTATUS_MIE_BIT];
       mstatus_q[MSTATUS_MIE_BIT] <= 1'b0;
-      mstatus_q[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB] <= PRIV_M;
+      mstatus_q[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB] <= current_privilege_q;
+      current_privilege_q <= PRIVILEGE_M;
     end else if (mret_enter) begin
       mstatus_q[MSTATUS_MIE_BIT] <= mstatus_q[MSTATUS_MPIE_BIT];
       mstatus_q[MSTATUS_MPIE_BIT] <= 1'b1;
-      mstatus_q[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB] <= PRIV_M;
+      mstatus_q[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB] <= PRIVILEGE_U;
+      unique case (mstatus_q[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB])
+        PRIVILEGE_U: current_privilege_q <= PRIVILEGE_U;
+        PRIVILEGE_S: current_privilege_q <= PRIVILEGE_S;
+        default:     current_privilege_q <= PRIVILEGE_M;
+      endcase
+    end else if (sret_enter) begin
+      mstatus_q[MSTATUS_SIE_BIT] <= mstatus_q[MSTATUS_SPIE_BIT];
+      mstatus_q[MSTATUS_SPIE_BIT] <= 1'b1;
+      mstatus_q[MSTATUS_SPP_BIT] <= 1'b0;
+      current_privilege_q <= mstatus_q[MSTATUS_SPP_BIT] ? PRIVILEGE_S : PRIVILEGE_U;
     end else if (wr_en) begin
       unique case (wr_addr)
         CSR_SSTATUS:  mstatus_q <= (mstatus_q & ~SSTATUS_MASK) |

@@ -355,6 +355,9 @@ always_comb begin
             12'h302: begin
                 ctrl_system.retire_action = RETIRE_MRET;
             end
+            12'h102: begin
+                ctrl_system.retire_action = RETIRE_SRET;
+            end
             default: begin
             end
         endcase

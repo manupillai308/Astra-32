@@ -61,6 +61,7 @@ logic        pipeline_stall;
 logic        branch_redirect;
 logic        trap_redirect;
 logic        mret_redirect;
+logic        sret_redirect;
 logic        interrupt_request;
 logic        interrupt_take;
 logic        branch_redirect_fire;
@@ -83,6 +84,7 @@ logic                   retire_barrier_active;
 logic                   retire_barrier_start;
 logic                   retire_barrier_commit;
 logic [31:0]            retire_barrier_resume_pc_q;
+logic                   retire_barrier_sret_q;
 
 // IF/ID equivalent: pc piped one cycle to align with the
 // sync imem output reg, which acts as IF/ID.instruction.
@@ -140,6 +142,7 @@ logic        wb_commit;
 logic        csr_commit;
 logic        trap_commit;
 logic        mret_commit;
+logic        sret_commit;
 logic        retire_commit;
 logic        instret_commit;
 logic        mem_wb_committed;
@@ -165,12 +168,19 @@ logic [31:0] ex_csr_old_data;
 logic [31:0] ex_csr_wr_data;
 logic        ex_csr_src_zero;
 logic        ex_csr_wr_en;
+logic        csr_access_illegal;
+logic        ex_illegal_csr_access;
+logic        ex_illegal_mret;
+logic        ex_illegal_sret;
+logic [31:0] ex_system_instruction;
+privilege_mode_t current_privilege;
 retire_action_t ex_retire_action;
 trap_payload_t ex_trap;
 logic        ex_load_store_misaligned;
 logic        ex_inst_addr_misaligned;
 logic [31:0] csr_mtvec;
 logic [31:0] csr_mepc;
+logic [31:0] csr_sepc;
 logic        irq_valid;
 interrupt_cause_t irq_cause;
 logic [31:0] interrupt_mepc;
@@ -203,11 +213,16 @@ assign imem_fire = imem_req && imem_ready;
 always_comb begin
   ex_retire_barrier_action = RETIRE_BARRIER_NONE;
 
-  if (id_ex.valid && (id_ex.retire_action == RETIRE_MRET)) begin
+  if (id_ex.valid &&
+      (((id_ex.retire_action == RETIRE_MRET) &&
+        (current_privilege == PRIVILEGE_M)) ||
+       ((id_ex.retire_action == RETIRE_SRET) &&
+        (current_privilege != PRIVILEGE_U)))) begin
     ex_retire_barrier_action = RETIRE_BARRIER_TRAP_RETURN;
   end else if (id_ex.valid &&
                (id_ex.retire_action == RETIRE_NORMAL) &&
-               ex_csr_wr_en) begin
+               ex_csr_wr_en &&
+               !csr_access_illegal) begin
     ex_retire_barrier_action = RETIRE_BARRIER_INTERRUPT_RECHECK;
   end
 end
@@ -218,7 +233,8 @@ assign retire_barrier_start = (retire_barrier_state_q == RETIRE_BARRIER_IDLE) &&
                               !redirect_fire && !retire_squash &&
                               !memory_stall && !fetch_stall;
 assign retire_barrier_commit = (retire_barrier_state_q == RETIRE_BARRIER_DRAIN) &&
-                               (((retire_barrier_action_q == RETIRE_BARRIER_TRAP_RETURN) && mret_commit) ||
+                               (((retire_barrier_action_q == RETIRE_BARRIER_TRAP_RETURN) &&
+                                 (mret_commit || sret_commit)) ||
                                 ((retire_barrier_action_q == RETIRE_BARRIER_INTERRUPT_RECHECK) && csr_commit));
 
 // --------------------------------------------------------
@@ -230,11 +246,13 @@ assign branch_redirect = ex_mem.valid &&
                          (ex_mem.branch_taken || ex_mem.pc_sel);
 assign trap_redirect = trap_commit;
 assign mret_redirect = mret_commit && !retire_barrier_active;
+assign sret_redirect = sret_commit && !retire_barrier_active;
 assign interrupt_request = irq_valid &&
                            (!retire_barrier_active ||
                             (retire_barrier_state_q == RETIRE_BARRIER_RECHECK)) &&
                            !trap_commit &&
                            !mret_commit &&
+                           !sret_commit &&
                            !csr_commit &&
                            !memory_stall &&
                            (!ex_mem.valid || (ex_mem.retire_action == RETIRE_NORMAL));
@@ -242,7 +260,7 @@ assign interrupt_take = interrupt_request && !fetch_stall;
 assign branch_redirect_fire = branch_redirect && !memory_stall && !fetch_stall;
 assign retire_barrier_resume_redirect =
     (retire_barrier_state_q == RETIRE_BARRIER_RECHECK) && !irq_valid;
-assign redirect_fire = trap_redirect || mret_redirect || interrupt_take ||
+assign redirect_fire = trap_redirect || mret_redirect || sret_redirect || interrupt_take ||
                        retire_barrier_resume_redirect || branch_redirect_fire;
 assign trap_vector = {csr_mtvec[31:2], 2'b00};
 assign interrupt_vector = (csr_mtvec[1:0] == 2'b01) ?
@@ -250,12 +268,14 @@ assign interrupt_vector = (csr_mtvec[1:0] == 2'b01) ?
                           trap_vector;
 assign redirect_target = trap_redirect ? trap_vector :
                          mret_redirect ? csr_mepc :
+                         sret_redirect ? csr_sepc :
                          interrupt_take ? interrupt_vector :
                          retire_barrier_resume_redirect ? retire_barrier_resume_pc_q :
                          ex_mem.branch_target;
 assign retire_squash_request = ex_mem.valid &&
                                ((ex_mem.retire_action == RETIRE_TRAP) ||
-                                (ex_mem.retire_action == RETIRE_MRET));
+                                (ex_mem.retire_action == RETIRE_MRET) ||
+                                (ex_mem.retire_action == RETIRE_SRET));
 assign retire_squash = retire_squash_request && !memory_stall && !fetch_stall;
 
 always_comb begin
@@ -295,6 +315,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     retire_barrier_state_q <= RETIRE_BARRIER_IDLE;
     retire_barrier_action_q <= RETIRE_BARRIER_NONE;
     retire_barrier_resume_pc_q <= RESET_PC;
+    retire_barrier_sret_q <= 1'b0;
   end else begin
     unique case (retire_barrier_state_q)
       RETIRE_BARRIER_IDLE: begin
@@ -302,6 +323,7 @@ always_ff @(posedge clk or negedge reset_n) begin
           retire_barrier_state_q <= RETIRE_BARRIER_DRAIN;
           retire_barrier_action_q <= ex_retire_barrier_action;
           retire_barrier_resume_pc_q <= ex_next_seq_pc;
+          retire_barrier_sret_q <= (id_ex.retire_action == RETIRE_SRET);
         end
       end
 
@@ -309,7 +331,7 @@ always_ff @(posedge clk or negedge reset_n) begin
         if (retire_barrier_commit) begin
           retire_barrier_state_q <= RETIRE_BARRIER_RECHECK;
           if (retire_barrier_action_q == RETIRE_BARRIER_TRAP_RETURN) begin
-            retire_barrier_resume_pc_q <= csr_mepc;
+            retire_barrier_resume_pc_q <= retire_barrier_sret_q ? csr_sepc : csr_mepc;
           end
         end
       end
@@ -317,11 +339,13 @@ always_ff @(posedge clk or negedge reset_n) begin
       RETIRE_BARRIER_RECHECK: begin
         retire_barrier_state_q <= RETIRE_BARRIER_IDLE;
         retire_barrier_action_q <= RETIRE_BARRIER_NONE;
+        retire_barrier_sret_q <= 1'b0;
       end
 
       default: begin
         retire_barrier_state_q <= RETIRE_BARRIER_IDLE;
         retire_barrier_action_q <= RETIRE_BARRIER_NONE;
+        retire_barrier_sret_q <= 1'b0;
       end
     endcase
   end
@@ -464,6 +488,7 @@ assign wb_commit = retire_commit && (mem_wb.retire_action == RETIRE_NORMAL) && m
 assign csr_commit = retire_commit && (mem_wb.retire_action == RETIRE_NORMAL) && mem_wb.csr_wr_en;
 assign trap_commit = retire_commit && (mem_wb.retire_action == RETIRE_TRAP);
 assign mret_commit = retire_commit && (mem_wb.retire_action == RETIRE_MRET);
+assign sret_commit = retire_commit && (mem_wb.retire_action == RETIRE_SRET);
 assign instret_commit = retire_commit && (mem_wb.retire_action != RETIRE_TRAP);
 
 register_file u_register_file (
@@ -483,6 +508,8 @@ csr_file u_csr_file (
     .reset_n     (reset_n),
     .rd_addr     (id_ex.csr_addr),
     .rd_data     (ex_csr_rd_data),
+    .access_wr_en(ex_csr_wr_en),
+    .access_illegal(csr_access_illegal),
     .wr_en       (csr_commit),
     .wr_addr     (mem_wb.csr_addr),
     .wr_data     (mem_wb.csr_wr_data),
@@ -493,8 +520,11 @@ csr_file u_csr_file (
     .trap_enter  (trap_commit || interrupt_take),
     .trap        (csr_trap),
     .mret_enter  (mret_commit),
+    .sret_enter  (sret_commit),
     .mtvec       (csr_mtvec),
-    .mepc        (csr_mepc)
+    .mepc        (csr_mepc),
+    .sepc        (csr_sepc),
+    .current_privilege(current_privilege)
 );
 
 always_comb begin
@@ -519,7 +549,15 @@ always_comb begin
 
   if (id_retire_action == RETIRE_TRAP) begin
     id_trap.mepc = if_id_pc;
-    id_trap.mcause = {28'h0, id_trap_cause};
+    if (id_trap_cause == TRAP_CAUSE_ECALL_M) begin // all ecall is decoded as ecall_m
+      unique case (current_privilege)
+        PRIVILEGE_U: id_trap.mcause = {28'h0, TRAP_CAUSE_ECALL_U};
+        PRIVILEGE_S: id_trap.mcause = {28'h0, TRAP_CAUSE_ECALL_S};
+        default:     id_trap.mcause = {28'h0, TRAP_CAUSE_ECALL_M};
+      endcase
+    end else begin
+      id_trap.mcause = {28'h0, id_trap_cause};
+    end
     id_trap.mtval = (id_trap_cause == TRAP_CAUSE_ILLEGAL_INSTRUCTION) ? if_id_instruction : 32'h0;
   end
 end
@@ -671,6 +709,13 @@ end
 assign ex_csr_wr_en = id_ex.csr_req &&
                       ((id_ex.csr_op == CSR_OP_RW) ||
                        ((id_ex.csr_op != CSR_OP_RW) && !ex_csr_src_zero));
+assign ex_illegal_csr_access = id_ex.csr_req && csr_access_illegal;
+assign ex_illegal_mret = (id_ex.retire_action == RETIRE_MRET) &&
+                         (current_privilege != PRIVILEGE_M);
+assign ex_illegal_sret = (id_ex.retire_action == RETIRE_SRET) &&
+                         (current_privilege == PRIVILEGE_U);
+assign ex_system_instruction = {id_ex.csr_addr, id_ex.rs1_addr, id_ex.funct3,
+                                id_ex.rd_addr, OPCODE_SYSTEM};
 
 always_comb begin
   ex_inst_addr_misaligned = (id_ex.pc_sel || ex_branch_taken) && (ex_branch_target[1:0] != 2'b00);
@@ -681,7 +726,12 @@ always_comb begin
   ex_retire_action = id_ex.retire_action;
   ex_trap = id_ex.trap;
 
-  if (id_ex.retire_action == RETIRE_NORMAL) begin
+  if (ex_illegal_csr_access || ex_illegal_mret || ex_illegal_sret) begin
+    ex_retire_action = RETIRE_TRAP;
+    ex_trap.mepc = id_ex.pc;
+    ex_trap.mcause = {28'h0, TRAP_CAUSE_ILLEGAL_INSTRUCTION};
+    ex_trap.mtval = ex_system_instruction;
+  end else if (id_ex.retire_action == RETIRE_NORMAL) begin
     if (ex_inst_addr_misaligned) begin
       ex_retire_action = RETIRE_TRAP;
       ex_trap.mepc = id_ex.pc;

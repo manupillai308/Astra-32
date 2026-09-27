@@ -141,6 +141,12 @@ typedef enum logic [1:0] {
     CSR_OP_RC = 2'b10
 } csr_op_t;
 
+typedef enum logic [1:0] {
+    PRIVILEGE_U = 2'b00,
+    PRIVILEGE_S = 2'b01,
+    PRIVILEGE_M = 2'b11
+} privilege_mode_t;
+
 typedef enum logic [3:0] {
     TRAP_CAUSE_INST_ADDR_MISALIGNED  = 4'd0,
     TRAP_CAUSE_ILLEGAL_INSTRUCTION   = 4'd2,
@@ -170,7 +176,8 @@ typedef struct packed {
 typedef enum logic [1:0] {
     RETIRE_NORMAL = 2'b00,
     RETIRE_TRAP   = 2'b01,
-    RETIRE_MRET   = 2'b10
+    RETIRE_MRET   = 2'b10,
+    RETIRE_SRET   = 2'b11
 } retire_action_t;
 
 typedef enum logic [1:0] {
