@@ -26,6 +26,8 @@ module csr_file (
 );
 
 localparam logic [11:0] CSR_MSTATUS  = 12'h300;
+localparam logic [11:0] CSR_MEDELEG  = 12'h302;
+localparam logic [11:0] CSR_MIDELEG  = 12'h303;
 localparam logic [11:0] CSR_MIE      = 12'h304;
 localparam logic [11:0] CSR_MTVEC    = 12'h305;
 localparam logic [11:0] CSR_MSCRATCH = 12'h340;
@@ -36,17 +38,54 @@ localparam logic [11:0] CSR_MIP      = 12'h344;
 localparam logic [11:0] CSR_MCYCLE   = 12'hb00;
 localparam logic [11:0] CSR_MINSTRET = 12'hb02;
 
+localparam logic [11:0] CSR_SSTATUS  = 12'h100;
+localparam logic [11:0] CSR_SIE      = 12'h104;
+localparam logic [11:0] CSR_STVEC    = 12'h105;
+localparam logic [11:0] CSR_SSCRATCH = 12'h140;
+localparam logic [11:0] CSR_SEPC     = 12'h141;
+localparam logic [11:0] CSR_SCAUSE   = 12'h142;
+localparam logic [11:0] CSR_STVAL    = 12'h143;
+localparam logic [11:0] CSR_SIP      = 12'h144;
+localparam logic [11:0] CSR_SATP     = 12'h180;
+
+localparam int MSTATUS_SIE_BIT = 1;
 localparam int MSTATUS_MIE_BIT = 3;
+localparam int MSTATUS_SPIE_BIT = 5;
 localparam int MSTATUS_MPIE_BIT = 7;
+localparam int MSTATUS_SPP_BIT = 8;
 localparam int MSTATUS_MPP_LSB = 11;
 localparam int MSTATUS_MPP_MSB = 12;
+localparam int MSTATUS_SUM_BIT = 18;
+localparam int MSTATUS_MXR_BIT = 19;
 localparam logic [1:0] PRIV_M = 2'b11;
-localparam logic [31:0] SUPPORTED_IRQ_MASK =
+localparam logic [31:0] SSTATUS_MASK =
+    (32'h1 << MSTATUS_SIE_BIT) |
+    (32'h1 << MSTATUS_SPIE_BIT) |
+    (32'h1 << MSTATUS_SPP_BIT) |
+    (32'h1 << MSTATUS_SUM_BIT) |
+    (32'h1 << MSTATUS_MXR_BIT);
+localparam logic [31:0] SUPERVISOR_IRQ_MASK =
+    (32'h1 << IRQ_CAUSE_SSI) |
+    (32'h1 << IRQ_CAUSE_STI) |
+    (32'h1 << IRQ_CAUSE_SEI);
+localparam logic [31:0] MACHINE_IRQ_MASK =
     (32'h1 << IRQ_CAUSE_MSI) |
     (32'h1 << IRQ_CAUSE_MTI) |
     (32'h1 << IRQ_CAUSE_MEI);
+localparam logic [31:0] SUPPORTED_IRQ_MASK =
+    SUPERVISOR_IRQ_MASK | MACHINE_IRQ_MASK;
+localparam logic [31:0] SUPPORTED_EXCEPTION_DELEG_MASK =
+    (32'h1 << TRAP_CAUSE_INST_ADDR_MISALIGNED) |
+    (32'h1 << TRAP_CAUSE_ILLEGAL_INSTRUCTION) |
+    (32'h1 << TRAP_CAUSE_BREAKPOINT) |
+    (32'h1 << TRAP_CAUSE_LOAD_ADDR_MISALIGNED) |
+    (32'h1 << TRAP_CAUSE_STORE_ADDR_MISALIGNED) |
+    (32'h1 << TRAP_CAUSE_ECALL_U) |
+    (32'h1 << TRAP_CAUSE_ECALL_S);
 
 logic [31:0] mstatus_q;
+logic [31:0] medeleg_q;
+logic [31:0] mideleg_q;
 logic [31:0] mie_q;
 logic [31:0] mtvec_q;
 logic [31:0] mscratch_q;
@@ -55,12 +94,23 @@ logic [31:0] mcause_q;
 logic [31:0] mtval_q;
 logic [31:0] mcycle_q;
 logic [31:0] minstret_q;
+logic [31:0] stvec_q;
+logic [31:0] sscratch_q;
+logic [31:0] sepc_q;
+logic [31:0] scause_q;
+logic [31:0] stval_q;
 logic [31:0] mip_value;
+logic [31:0] sstatus_value;
+logic [31:0] sie_value;
+logic [31:0] sip_value;
 logic [31:0] enabled_pending;
 
 assign mtvec = mtvec_q;
 assign mepc = mepc_q;
 assign mip_value = irq_pending & SUPPORTED_IRQ_MASK;
+assign sstatus_value = mstatus_q & SSTATUS_MASK;
+assign sie_value = mie_q & mideleg_q & SUPERVISOR_IRQ_MASK;
+assign sip_value = mip_value & mideleg_q & SUPERVISOR_IRQ_MASK;
 assign enabled_pending = mip_value & mie_q;
 assign irq_valid = mstatus_q[MSTATUS_MIE_BIT] && (enabled_pending != 32'h0);
 
@@ -73,12 +123,29 @@ always_comb begin
     irq_cause = IRQ_CAUSE_MSI;
   end else if (enabled_pending[IRQ_CAUSE_MTI]) begin
     irq_cause = IRQ_CAUSE_MTI;
+  end else if (enabled_pending[IRQ_CAUSE_SEI]) begin
+    irq_cause = IRQ_CAUSE_SEI;
+  end else if (enabled_pending[IRQ_CAUSE_SSI]) begin
+    irq_cause = IRQ_CAUSE_SSI;
+  end else if (enabled_pending[IRQ_CAUSE_STI]) begin
+    irq_cause = IRQ_CAUSE_STI;
   end
 end
 
 always_comb begin
   unique case (rd_addr)
+    CSR_SSTATUS:  rd_data = sstatus_value;
+    CSR_SIE:      rd_data = sie_value;
+    CSR_STVEC:    rd_data = stvec_q;
+    CSR_SSCRATCH: rd_data = sscratch_q;
+    CSR_SEPC:     rd_data = sepc_q;
+    CSR_SCAUSE:   rd_data = scause_q;
+    CSR_STVAL:    rd_data = stval_q;
+    CSR_SIP:      rd_data = sip_value;
+    CSR_SATP:     rd_data = 32'h0;
     CSR_MSTATUS:  rd_data = mstatus_q;
+    CSR_MEDELEG:  rd_data = medeleg_q;
+    CSR_MIDELEG:  rd_data = mideleg_q;
     CSR_MIE:      rd_data = mie_q;
     CSR_MTVEC:    rd_data = mtvec_q;
     CSR_MSCRATCH: rd_data = mscratch_q;
@@ -93,9 +160,15 @@ always_comb begin
 
   if (wr_en && (wr_addr == rd_addr)) begin
     unique case (rd_addr)
-      CSR_MIE: rd_data = wr_data & SUPPORTED_IRQ_MASK;
-      CSR_MIP: rd_data = mip_value;
-      default: rd_data = wr_data;
+      CSR_SSTATUS: rd_data = wr_data & SSTATUS_MASK;
+      CSR_SIE:     rd_data = wr_data & mideleg_q & SUPERVISOR_IRQ_MASK;
+      CSR_SIP:     rd_data = sip_value;
+      CSR_SATP:    rd_data = 32'h0;
+      CSR_MEDELEG: rd_data = wr_data & SUPPORTED_EXCEPTION_DELEG_MASK;
+      CSR_MIDELEG: rd_data = wr_data & SUPERVISOR_IRQ_MASK;
+      CSR_MIE:     rd_data = wr_data & SUPPORTED_IRQ_MASK;
+      CSR_MIP:     rd_data = mip_value;
+      default:     rd_data = wr_data;
     endcase
   end
 end
@@ -103,6 +176,8 @@ end
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) begin
     mstatus_q <= 32'h0;
+    medeleg_q <= 32'h0;
+    mideleg_q <= 32'h0;
     mie_q <= 32'h0;
     mtvec_q <= 32'h0;
     mscratch_q <= 32'h0;
@@ -111,6 +186,11 @@ always_ff @(posedge clk or negedge reset_n) begin
     mtval_q <= 32'h0;
     mcycle_q <= 32'h0;
     minstret_q <= 32'h0;
+    stvec_q <= 32'h0;
+    sscratch_q <= 32'h0;
+    sepc_q <= 32'h0;
+    scause_q <= 32'h0;
+    stval_q <= 32'h0;
   end else begin
     mcycle_q <= mcycle_q + 1'b1;
 
@@ -131,7 +211,22 @@ always_ff @(posedge clk or negedge reset_n) begin
       mstatus_q[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB] <= PRIV_M;
     end else if (wr_en) begin
       unique case (wr_addr)
+        CSR_SSTATUS:  mstatus_q <= (mstatus_q & ~SSTATUS_MASK) |
+                                   (wr_data & SSTATUS_MASK);
+        CSR_SIE:      mie_q <= (mie_q & ~(mideleg_q & SUPERVISOR_IRQ_MASK)) |
+                              (wr_data & mideleg_q & SUPERVISOR_IRQ_MASK);
+        CSR_STVEC:    stvec_q <= wr_data;
+        CSR_SSCRATCH: sscratch_q <= wr_data;
+        CSR_SEPC:     sepc_q <= wr_data;
+        CSR_SCAUSE:   scause_q <= wr_data;
+        CSR_STVAL:    stval_q <= wr_data;
+        CSR_SIP: begin
+        end
+        CSR_SATP: begin
+        end
         CSR_MSTATUS:  mstatus_q <= wr_data;
+        CSR_MEDELEG:  medeleg_q <= wr_data & SUPPORTED_EXCEPTION_DELEG_MASK;
+        CSR_MIDELEG:  mideleg_q <= wr_data & SUPERVISOR_IRQ_MASK;
         CSR_MIE:      mie_q <= wr_data & SUPPORTED_IRQ_MASK;
         CSR_MTVEC:    mtvec_q <= wr_data;
         CSR_MSCRATCH: mscratch_q <= wr_data;

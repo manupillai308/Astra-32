@@ -147,12 +147,17 @@ typedef enum logic [3:0] {
     TRAP_CAUSE_BREAKPOINT            = 4'd3,
     TRAP_CAUSE_LOAD_ADDR_MISALIGNED  = 4'd4,
     TRAP_CAUSE_STORE_ADDR_MISALIGNED = 4'd6,
+    TRAP_CAUSE_ECALL_U               = 4'd8,
+    TRAP_CAUSE_ECALL_S               = 4'd9,
     TRAP_CAUSE_ECALL_M               = 4'd11
 } trap_cause_t;
 
 typedef enum logic [4:0] {
+    IRQ_CAUSE_SSI = 5'd1,
     IRQ_CAUSE_MSI = 5'd3,
+    IRQ_CAUSE_STI = 5'd5,
     IRQ_CAUSE_MTI = 5'd7,
+    IRQ_CAUSE_SEI = 5'd9,
     IRQ_CAUSE_MEI = 5'd11
 } interrupt_cause_t;
 
