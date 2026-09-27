@@ -25,8 +25,10 @@ module csr_file (
   input  logic        sret_enter,
 
   output logic [31:0] mtvec,
+  output logic [31:0] stvec,
   output logic [31:0] mepc,
   output logic [31:0] sepc,
+  output logic        trap_to_supervisor,
   output privilege_mode_t current_privilege
 );
 
@@ -112,9 +114,13 @@ logic        csr_implemented;
 privilege_mode_t current_privilege_q;
 
 assign mtvec = mtvec_q;
+assign stvec = stvec_q;
 assign mepc = mepc_q;
 assign sepc = sepc_q;
 assign current_privilege = current_privilege_q;
+assign trap_to_supervisor = !trap.mcause[31] &&
+                            (current_privilege_q != PRIVILEGE_M) &&
+                            medeleg_q[trap.mcause[4:0]];
 assign mip_value = irq_pending & SUPPORTED_IRQ_MASK;
 assign sstatus_value = mstatus_q & SSTATUS_MASK;
 assign sie_value = mie_q & mideleg_q & SUPERVISOR_IRQ_MASK;
@@ -225,13 +231,23 @@ always_ff @(posedge clk or negedge reset_n) begin
     end
 
     if (trap_enter) begin
-      mepc_q <= trap.mepc;
-      mcause_q <= trap.mcause;
-      mtval_q <= trap.mtval;
-      mstatus_q[MSTATUS_MPIE_BIT] <= mstatus_q[MSTATUS_MIE_BIT];
-      mstatus_q[MSTATUS_MIE_BIT] <= 1'b0;
-      mstatus_q[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB] <= current_privilege_q;
-      current_privilege_q <= PRIVILEGE_M;
+      if (trap_to_supervisor) begin
+        sepc_q <= trap.mepc;
+        scause_q <= trap.mcause;
+        stval_q <= trap.mtval;
+        mstatus_q[MSTATUS_SPIE_BIT] <= mstatus_q[MSTATUS_SIE_BIT];
+        mstatus_q[MSTATUS_SIE_BIT] <= 1'b0;
+        mstatus_q[MSTATUS_SPP_BIT] <= (current_privilege_q == PRIVILEGE_S);
+        current_privilege_q <= PRIVILEGE_S;
+      end else begin
+        mepc_q <= trap.mepc;
+        mcause_q <= trap.mcause;
+        mtval_q <= trap.mtval;
+        mstatus_q[MSTATUS_MPIE_BIT] <= mstatus_q[MSTATUS_MIE_BIT];
+        mstatus_q[MSTATUS_MIE_BIT] <= 1'b0;
+        mstatus_q[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB] <= current_privilege_q;
+        current_privilege_q <= PRIVILEGE_M;
+      end
     end else if (mret_enter) begin
       mstatus_q[MSTATUS_MIE_BIT] <= mstatus_q[MSTATUS_MPIE_BIT];
       mstatus_q[MSTATUS_MPIE_BIT] <= 1'b1;

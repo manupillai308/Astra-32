@@ -179,8 +179,10 @@ trap_payload_t ex_trap;
 logic        ex_load_store_misaligned;
 logic        ex_inst_addr_misaligned;
 logic [31:0] csr_mtvec;
+logic [31:0] csr_stvec;
 logic [31:0] csr_mepc;
 logic [31:0] csr_sepc;
+logic        trap_to_supervisor;
 logic        irq_valid;
 interrupt_cause_t irq_cause;
 logic [31:0] interrupt_mepc;
@@ -262,7 +264,8 @@ assign retire_barrier_resume_redirect =
     (retire_barrier_state_q == RETIRE_BARRIER_RECHECK) && !irq_valid;
 assign redirect_fire = trap_redirect || mret_redirect || sret_redirect || interrupt_take ||
                        retire_barrier_resume_redirect || branch_redirect_fire;
-assign trap_vector = {csr_mtvec[31:2], 2'b00};
+assign trap_vector = trap_to_supervisor ? {csr_stvec[31:2], 2'b00} :
+                                          {csr_mtvec[31:2], 2'b00};
 assign interrupt_vector = (csr_mtvec[1:0] == 2'b01) ?
                           trap_vector + ({27'h0, irq_cause} << 2) :
                           trap_vector;
@@ -522,8 +525,10 @@ csr_file u_csr_file (
     .mret_enter  (mret_commit),
     .sret_enter  (sret_commit),
     .mtvec       (csr_mtvec),
+    .stvec       (csr_stvec),
     .mepc        (csr_mepc),
     .sepc        (csr_sepc),
+    .trap_to_supervisor(trap_to_supervisor),
     .current_privilege(current_privilege)
 );
 
