@@ -33,6 +33,7 @@ module csr_file (
 );
 
 localparam logic [11:0] CSR_MSTATUS  = 12'h300;
+localparam logic [11:0] CSR_MISA     = 12'h301;
 localparam logic [11:0] CSR_MEDELEG  = 12'h302;
 localparam logic [11:0] CSR_MIDELEG  = 12'h303;
 localparam logic [11:0] CSR_MIE      = 12'h304;
@@ -44,6 +45,11 @@ localparam logic [11:0] CSR_MTVAL    = 12'h343;
 localparam logic [11:0] CSR_MIP      = 12'h344;
 localparam logic [11:0] CSR_MCYCLE   = 12'hb00;
 localparam logic [11:0] CSR_MINSTRET = 12'hb02;
+localparam logic [11:0] CSR_MVENDORID = 12'hf11;
+localparam logic [11:0] CSR_MARCHID   = 12'hf12;
+localparam logic [11:0] CSR_MIMPID    = 12'hf13;
+localparam logic [11:0] CSR_MHARTID   = 12'hf14;
+localparam logic [11:0] CSR_MCONFIGPTR = 12'hf15;
 
 localparam logic [11:0] CSR_SSTATUS  = 12'h100;
 localparam logic [11:0] CSR_SIE      = 12'h104;
@@ -64,6 +70,9 @@ localparam int MSTATUS_MPP_LSB = 11;
 localparam int MSTATUS_MPP_MSB = 12;
 localparam int MSTATUS_SUM_BIT = 18;
 localparam int MSTATUS_MXR_BIT = 19;
+localparam logic [31:0] MISA_VALUE =
+    (32'h1 << 30) |  // MXL=1: RV32
+    (32'h1 << 8);    // I: base integer ISA
 localparam logic [31:0] SSTATUS_MASK =
     (32'h1 << MSTATUS_SIE_BIT) |
     (32'h1 << MSTATUS_SPIE_BIT) |
@@ -166,9 +175,10 @@ always_comb begin
   unique case (rd_addr)
     CSR_SSTATUS, CSR_SIE, CSR_STVEC, CSR_SSCRATCH, CSR_SEPC,
     CSR_SCAUSE, CSR_STVAL, CSR_SIP, CSR_SATP,
-    CSR_MSTATUS, CSR_MEDELEG, CSR_MIDELEG, CSR_MIE, CSR_MTVEC,
+    CSR_MSTATUS, CSR_MISA, CSR_MEDELEG, CSR_MIDELEG, CSR_MIE, CSR_MTVEC,
     CSR_MSCRATCH, CSR_MEPC, CSR_MCAUSE, CSR_MTVAL, CSR_MIP,
-    CSR_MCYCLE, CSR_MINSTRET: csr_implemented = 1'b1;
+    CSR_MCYCLE, CSR_MINSTRET, CSR_MVENDORID, CSR_MARCHID,
+    CSR_MIMPID, CSR_MHARTID, CSR_MCONFIGPTR: csr_implemented = 1'b1;
     default:                  csr_implemented = 1'b0;
   endcase
 
@@ -208,6 +218,7 @@ always_comb begin
     CSR_SIP:      rd_data = sip_value;
     CSR_SATP:     rd_data = 32'h0;
     CSR_MSTATUS:  rd_data = mstatus_q;
+    CSR_MISA:     rd_data = MISA_VALUE;
     CSR_MEDELEG:  rd_data = medeleg_q;
     CSR_MIDELEG:  rd_data = mideleg_q;
     CSR_MIE:      rd_data = mie_q;
@@ -219,6 +230,11 @@ always_comb begin
     CSR_MIP:      rd_data = mip_value;
     CSR_MCYCLE:   rd_data = mcycle_q;
     CSR_MINSTRET: rd_data = minstret_q;
+    CSR_MVENDORID,
+    CSR_MARCHID,
+    CSR_MIMPID,
+    CSR_MHARTID,
+    CSR_MCONFIGPTR: rd_data = 32'h0;
     default:      rd_data = 32'h0;
   endcase
 
@@ -229,6 +245,7 @@ always_comb begin
       CSR_SIP:     rd_data = (sip_value & ~SIP_SW_WRITABLE_MASK) |
                                   (wr_data & SIP_SW_WRITABLE_MASK & mideleg_q);
       CSR_SATP:    rd_data = 32'h0;
+      CSR_MISA:    rd_data = MISA_VALUE;
       CSR_MEDELEG: rd_data = wr_data & SUPPORTED_EXCEPTION_DELEG_MASK;
       CSR_MIDELEG: rd_data = wr_data & SUPERVISOR_IRQ_MASK;
       CSR_MIE:     rd_data = wr_data & SUPPORTED_IRQ_MASK;
@@ -315,6 +332,8 @@ always_ff @(posedge clk or negedge reset_n) begin
         CSR_SATP: begin
         end
         CSR_MSTATUS:  mstatus_q <= wr_data;
+        CSR_MISA: begin
+        end
         CSR_MEDELEG:  medeleg_q <= wr_data & SUPPORTED_EXCEPTION_DELEG_MASK;
         CSR_MIDELEG:  mideleg_q <= wr_data & SUPERVISOR_IRQ_MASK;
         CSR_MIE:      mie_q <= wr_data & SUPPORTED_IRQ_MASK;
