@@ -74,6 +74,8 @@ localparam logic [31:0] SUPERVISOR_IRQ_MASK =
     (32'h1 << IRQ_CAUSE_SSI) |
     (32'h1 << IRQ_CAUSE_STI) |
     (32'h1 << IRQ_CAUSE_SEI);
+localparam logic [31:0] MIP_SW_WRITABLE_MASK = SUPERVISOR_IRQ_MASK;
+localparam logic [31:0] SIP_SW_WRITABLE_MASK = (32'h1 << IRQ_CAUSE_SSI);
 localparam logic [31:0] MACHINE_IRQ_MASK =
     (32'h1 << IRQ_CAUSE_MSI) |
     (32'h1 << IRQ_CAUSE_MTI) |
@@ -110,6 +112,11 @@ logic [31:0] sstatus_value;
 logic [31:0] sie_value;
 logic [31:0] sip_value;
 logic [31:0] enabled_pending;
+logic [31:0] machine_enabled_pending;
+logic [31:0] supervisor_enabled_pending;
+logic [31:0] eligible_pending;
+// Software-injected supervisor pending bits stored behind mip.
+logic [31:0] mip_supervisor_sw_q;
 logic        csr_implemented;
 privilege_mode_t current_privilege_q;
 
@@ -118,16 +125,42 @@ assign stvec = stvec_q;
 assign mepc = mepc_q;
 assign sepc = sepc_q;
 assign current_privilege = current_privilege_q;
-assign trap_to_supervisor = !trap.mcause[31] &&
-                            (current_privilege_q != PRIVILEGE_M) &&
-                            medeleg_q[trap.mcause[4:0]];
-assign mip_value = irq_pending & SUPPORTED_IRQ_MASK;
+assign trap_to_supervisor = (current_privilege_q != PRIVILEGE_M) &&
+                            (trap.mcause[31] ? mideleg_q[trap.mcause[4:0]] :
+                                               medeleg_q[trap.mcause[4:0]]);
+assign mip_value = (irq_pending & SUPPORTED_IRQ_MASK) |
+                   mip_supervisor_sw_q;
 assign sstatus_value = mstatus_q & SSTATUS_MASK;
 assign sie_value = mie_q & mideleg_q & SUPERVISOR_IRQ_MASK;
 assign sip_value = mip_value & mideleg_q & SUPERVISOR_IRQ_MASK;
 assign enabled_pending = mip_value & mie_q;
-assign irq_valid = ((current_privilege_q != PRIVILEGE_M) || mstatus_q[MSTATUS_MIE_BIT]) &&
-                   (enabled_pending != 32'h0);
+assign machine_enabled_pending = enabled_pending & ~mideleg_q;
+assign supervisor_enabled_pending = enabled_pending & mideleg_q;
+
+always_comb begin
+  eligible_pending = 32'h0;
+
+  unique case (current_privilege_q)
+    PRIVILEGE_M: begin
+      if (mstatus_q[MSTATUS_MIE_BIT]) begin
+        eligible_pending = machine_enabled_pending;
+      end
+    end
+    PRIVILEGE_S: begin
+      if (machine_enabled_pending != 32'h0) begin
+        eligible_pending = machine_enabled_pending;
+      end else if (mstatus_q[MSTATUS_SIE_BIT]) begin
+        eligible_pending = supervisor_enabled_pending;
+      end
+    end
+    default: begin
+      eligible_pending = (machine_enabled_pending != 32'h0) ? machine_enabled_pending :
+                                                               supervisor_enabled_pending;
+    end
+  endcase
+end
+
+assign irq_valid = (eligible_pending != 32'h0);
 
 always_comb begin
   unique case (rd_addr)
@@ -148,17 +181,17 @@ end
 always_comb begin
   irq_cause = IRQ_CAUSE_MSI;
 
-  if (enabled_pending[IRQ_CAUSE_MEI]) begin
+  if (eligible_pending[IRQ_CAUSE_MEI]) begin
     irq_cause = IRQ_CAUSE_MEI;
-  end else if (enabled_pending[IRQ_CAUSE_MSI]) begin
+  end else if (eligible_pending[IRQ_CAUSE_MSI]) begin
     irq_cause = IRQ_CAUSE_MSI;
-  end else if (enabled_pending[IRQ_CAUSE_MTI]) begin
+  end else if (eligible_pending[IRQ_CAUSE_MTI]) begin
     irq_cause = IRQ_CAUSE_MTI;
-  end else if (enabled_pending[IRQ_CAUSE_SEI]) begin
+  end else if (eligible_pending[IRQ_CAUSE_SEI]) begin
     irq_cause = IRQ_CAUSE_SEI;
-  end else if (enabled_pending[IRQ_CAUSE_SSI]) begin
+  end else if (eligible_pending[IRQ_CAUSE_SSI]) begin
     irq_cause = IRQ_CAUSE_SSI;
-  end else if (enabled_pending[IRQ_CAUSE_STI]) begin
+  end else if (eligible_pending[IRQ_CAUSE_STI]) begin
     irq_cause = IRQ_CAUSE_STI;
   end
 end
@@ -193,12 +226,14 @@ always_comb begin
     unique case (rd_addr)
       CSR_SSTATUS: rd_data = wr_data & SSTATUS_MASK;
       CSR_SIE:     rd_data = wr_data & mideleg_q & SUPERVISOR_IRQ_MASK;
-      CSR_SIP:     rd_data = sip_value;
+      CSR_SIP:     rd_data = (sip_value & ~SIP_SW_WRITABLE_MASK) |
+                                  (wr_data & SIP_SW_WRITABLE_MASK & mideleg_q);
       CSR_SATP:    rd_data = 32'h0;
       CSR_MEDELEG: rd_data = wr_data & SUPPORTED_EXCEPTION_DELEG_MASK;
       CSR_MIDELEG: rd_data = wr_data & SUPERVISOR_IRQ_MASK;
       CSR_MIE:     rd_data = wr_data & SUPPORTED_IRQ_MASK;
-      CSR_MIP:     rd_data = mip_value;
+      CSR_MIP:     rd_data = (mip_value & ~MIP_SW_WRITABLE_MASK) |
+                                  (wr_data & MIP_SW_WRITABLE_MASK);
       default:     rd_data = wr_data;
     endcase
   end
@@ -222,6 +257,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     sepc_q <= 32'h0;
     scause_q <= 32'h0;
     stval_q <= 32'h0;
+    mip_supervisor_sw_q <= 32'h0;
     current_privilege_q <= PRIVILEGE_M;
   end else begin
     mcycle_q <= mcycle_q + 1'b1;
@@ -273,8 +309,9 @@ always_ff @(posedge clk or negedge reset_n) begin
         CSR_SEPC:     sepc_q <= wr_data;
         CSR_SCAUSE:   scause_q <= wr_data;
         CSR_STVAL:    stval_q <= wr_data;
-        CSR_SIP: begin
-        end
+        CSR_SIP:      mip_supervisor_sw_q <=
+                          (mip_supervisor_sw_q & ~SIP_SW_WRITABLE_MASK) |
+                          (wr_data & SIP_SW_WRITABLE_MASK & mideleg_q);
         CSR_SATP: begin
         end
         CSR_MSTATUS:  mstatus_q <= wr_data;
@@ -286,8 +323,7 @@ always_ff @(posedge clk or negedge reset_n) begin
         CSR_MEPC:     mepc_q <= wr_data;
         CSR_MCAUSE:   mcause_q <= wr_data;
         CSR_MTVAL:    mtval_q <= wr_data;
-        CSR_MIP: begin
-        end
+        CSR_MIP:      mip_supervisor_sw_q <= wr_data & MIP_SW_WRITABLE_MASK;
         CSR_MCYCLE:   mcycle_q <= wr_data;
         CSR_MINSTRET: minstret_q <= wr_data;
         default: begin
