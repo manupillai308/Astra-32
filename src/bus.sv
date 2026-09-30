@@ -36,6 +36,7 @@ module bus #(
   output logic [LED_WIDTH-1:0] mmio_led,
   output logic                 clint_msip,
   output logic                 clint_mtip,
+  output logic [63:0]          clint_mtime,
 
   input  logic                 uart_rx,
   output logic                 uart_tx,
@@ -492,7 +493,8 @@ clint #(
   .rd_data (clint_rd_data),
   .busy    (clint_busy),
   .msip    (clint_msip),
-  .mtip    (clint_mtip)
+  .mtip    (clint_mtip),
+  .mtime   (clint_mtime)
 );
 
 rom_memory #(

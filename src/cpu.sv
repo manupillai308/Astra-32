@@ -24,6 +24,7 @@ module cpu #(
   input logic clk,
   input logic reset_n,
   input logic [31:0] irq_pending,
+  input logic [63:0] time_value,
 
   output logic        imem_req,
   output logic [31:0] imem_addr,
@@ -183,6 +184,7 @@ logic [31:0] csr_stvec;
 logic [31:0] csr_mepc;
 logic [31:0] csr_sepc;
 logic        trap_to_supervisor;
+logic        csr_sret_blocked;
 logic        irq_valid;
 interrupt_cause_t irq_cause;
 logic [31:0] interrupt_mepc;
@@ -220,7 +222,8 @@ always_comb begin
       (((id_ex.retire_action == RETIRE_MRET) &&
         (current_privilege == PRIVILEGE_M)) ||
        ((id_ex.retire_action == RETIRE_SRET) &&
-        (current_privilege != PRIVILEGE_U)))) begin
+        (current_privilege != PRIVILEGE_U) &&
+        !csr_sret_blocked))) begin
     ex_retire_barrier_action = RETIRE_BARRIER_TRAP_RETURN;
   end else if (id_ex.valid &&
                (id_ex.retire_action == RETIRE_NORMAL) &&
@@ -518,6 +521,7 @@ csr_file u_csr_file (
     .wr_addr     (mem_wb.csr_addr),
     .wr_data     (mem_wb.csr_wr_data),
     .instret_inc (instret_commit),
+    .time_value  (time_value),
     .irq_pending (irq_pending),
     .irq_valid   (irq_valid),
     .irq_cause   (irq_cause),
@@ -530,6 +534,7 @@ csr_file u_csr_file (
     .mepc        (csr_mepc),
     .sepc        (csr_sepc),
     .trap_to_supervisor(trap_to_supervisor),
+    .sret_blocked(csr_sret_blocked),
     .current_privilege(current_privilege)
 );
 
@@ -719,7 +724,7 @@ assign ex_illegal_csr_access = id_ex.csr_req && csr_access_illegal;
 assign ex_illegal_mret = (id_ex.retire_action == RETIRE_MRET) &&
                          (current_privilege != PRIVILEGE_M);
 assign ex_illegal_sret = (id_ex.retire_action == RETIRE_SRET) &&
-                         (current_privilege == PRIVILEGE_U);
+                         ((current_privilege == PRIVILEGE_U) || csr_sret_blocked);
 assign ex_system_instruction = {id_ex.csr_addr, id_ex.rs1_addr, id_ex.funct3,
                                 id_ex.rd_addr, OPCODE_SYSTEM};
 

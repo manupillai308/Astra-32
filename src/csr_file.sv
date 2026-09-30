@@ -14,6 +14,7 @@ module csr_file (
   input  logic [31:0] wr_data,
 
   input  logic        instret_inc,
+  input  logic [63:0] time_value,
 
   input  logic [31:0] irq_pending,
   output logic        irq_valid,
@@ -29,6 +30,7 @@ module csr_file (
   output logic [31:0] mepc,
   output logic [31:0] sepc,
   output logic        trap_to_supervisor,
+  output logic        sret_blocked,
   output privilege_mode_t current_privilege
 );
 
@@ -38,6 +40,8 @@ localparam logic [11:0] CSR_MEDELEG  = 12'h302;
 localparam logic [11:0] CSR_MIDELEG  = 12'h303;
 localparam logic [11:0] CSR_MIE      = 12'h304;
 localparam logic [11:0] CSR_MTVEC    = 12'h305;
+localparam logic [11:0] CSR_MCOUNTEREN = 12'h306;
+localparam logic [11:0] CSR_MSTATUSH = 12'h310;
 localparam logic [11:0] CSR_MSCRATCH = 12'h340;
 localparam logic [11:0] CSR_MEPC     = 12'h341;
 localparam logic [11:0] CSR_MCAUSE   = 12'h342;
@@ -45,6 +49,8 @@ localparam logic [11:0] CSR_MTVAL    = 12'h343;
 localparam logic [11:0] CSR_MIP      = 12'h344;
 localparam logic [11:0] CSR_MCYCLE   = 12'hb00;
 localparam logic [11:0] CSR_MINSTRET = 12'hb02;
+localparam logic [11:0] CSR_MCYCLEH  = 12'hb80;
+localparam logic [11:0] CSR_MINSTRETH = 12'hb82;
 localparam logic [11:0] CSR_MVENDORID = 12'hf11;
 localparam logic [11:0] CSR_MARCHID   = 12'hf12;
 localparam logic [11:0] CSR_MIMPID    = 12'hf13;
@@ -54,12 +60,19 @@ localparam logic [11:0] CSR_MCONFIGPTR = 12'hf15;
 localparam logic [11:0] CSR_SSTATUS  = 12'h100;
 localparam logic [11:0] CSR_SIE      = 12'h104;
 localparam logic [11:0] CSR_STVEC    = 12'h105;
+localparam logic [11:0] CSR_SCOUNTEREN = 12'h106;
 localparam logic [11:0] CSR_SSCRATCH = 12'h140;
 localparam logic [11:0] CSR_SEPC     = 12'h141;
 localparam logic [11:0] CSR_SCAUSE   = 12'h142;
 localparam logic [11:0] CSR_STVAL    = 12'h143;
 localparam logic [11:0] CSR_SIP      = 12'h144;
 localparam logic [11:0] CSR_SATP     = 12'h180;
+localparam logic [11:0] CSR_CYCLE    = 12'hc00;
+localparam logic [11:0] CSR_TIME     = 12'hc01;
+localparam logic [11:0] CSR_INSTRET  = 12'hc02;
+localparam logic [11:0] CSR_CYCLEH   = 12'hc80;
+localparam logic [11:0] CSR_TIMEH    = 12'hc81;
+localparam logic [11:0] CSR_INSTRETH = 12'hc82;
 
 localparam int MSTATUS_SIE_BIT = 1;
 localparam int MSTATUS_MIE_BIT = 3;
@@ -68,17 +81,32 @@ localparam int MSTATUS_MPIE_BIT = 7;
 localparam int MSTATUS_SPP_BIT = 8;
 localparam int MSTATUS_MPP_LSB = 11;
 localparam int MSTATUS_MPP_MSB = 12;
+localparam int MSTATUS_MPRV_BIT = 17;
 localparam int MSTATUS_SUM_BIT = 18;
 localparam int MSTATUS_MXR_BIT = 19;
+localparam int MSTATUS_TVM_BIT = 20;
+localparam int MSTATUS_TW_BIT = 21;
+localparam int MSTATUS_TSR_BIT = 22;
 localparam logic [31:0] MISA_VALUE =
     (32'h1 << 30) |  // MXL=1: RV32
+    (32'h1 << 20) |  // U: user mode
+    (32'h1 << 18) |  // S: supervisor mode
     (32'h1 << 8);    // I: base integer ISA
 localparam logic [31:0] SSTATUS_MASK =
     (32'h1 << MSTATUS_SIE_BIT) |
     (32'h1 << MSTATUS_SPIE_BIT) |
     (32'h1 << MSTATUS_SPP_BIT) |
-    (32'h1 << MSTATUS_SUM_BIT) |
     (32'h1 << MSTATUS_MXR_BIT);
+localparam logic [31:0] MSTATUS_WRITABLE_MASK =
+    SSTATUS_MASK |
+    (32'h1 << MSTATUS_MIE_BIT) |
+    (32'h1 << MSTATUS_MPIE_BIT) |
+    (32'h3 << MSTATUS_MPP_LSB) |
+    (32'h1 << MSTATUS_MPRV_BIT) |
+    (32'h1 << MSTATUS_TVM_BIT) |
+    (32'h1 << MSTATUS_TW_BIT) |
+    (32'h1 << MSTATUS_TSR_BIT);
+localparam logic [31:0] COUNTER_ENABLE_MASK = 32'h0000_0007;
 localparam logic [31:0] SUPERVISOR_IRQ_MASK =
     (32'h1 << IRQ_CAUSE_SSI) |
     (32'h1 << IRQ_CAUSE_STI) |
@@ -109,8 +137,10 @@ logic [31:0] mscratch_q;
 logic [31:0] mepc_q;
 logic [31:0] mcause_q;
 logic [31:0] mtval_q;
-logic [31:0] mcycle_q;
-logic [31:0] minstret_q;
+logic [63:0] mcycle_q;
+logic [63:0] minstret_q;
+logic [31:0] mcounteren_q;
+logic [31:0] scounteren_q;
 logic [31:0] stvec_q;
 logic [31:0] sscratch_q;
 logic [31:0] sepc_q;
@@ -127,6 +157,10 @@ logic [31:0] eligible_pending;
 // Software-injected supervisor pending bits stored behind mip.
 logic [31:0] mip_supervisor_sw_q;
 logic        csr_implemented;
+logic        counter_access;
+logic [1:0]  counter_enable_bit;
+logic        counter_access_illegal;
+logic [31:0] mstatus_write_value;
 privilege_mode_t current_privilege_q;
 
 assign mtvec = mtvec_q;
@@ -134,6 +168,8 @@ assign stvec = stvec_q;
 assign mepc = mepc_q;
 assign sepc = sepc_q;
 assign current_privilege = current_privilege_q;
+assign sret_blocked = (current_privilege_q == PRIVILEGE_S) &&
+                      mstatus_q[MSTATUS_TSR_BIT];
 assign trap_to_supervisor = (current_privilege_q != PRIVILEGE_M) &&
                             (trap.mcause[31] ? mideleg_q[trap.mcause[4:0]] :
                                                medeleg_q[trap.mcause[4:0]]);
@@ -172,12 +208,54 @@ end
 assign irq_valid = (eligible_pending != 32'h0);
 
 always_comb begin
+  counter_access = 1'b1;
+  counter_enable_bit = 2'd0;
+
   unique case (rd_addr)
-    CSR_SSTATUS, CSR_SIE, CSR_STVEC, CSR_SSCRATCH, CSR_SEPC,
+    CSR_CYCLE, CSR_CYCLEH:     counter_enable_bit = 2'd0;
+    CSR_TIME, CSR_TIMEH:       counter_enable_bit = 2'd1;
+    CSR_INSTRET, CSR_INSTRETH: counter_enable_bit = 2'd2;
+    default: begin
+      counter_access = 1'b0;
+      counter_enable_bit = 2'd0;
+    end
+  endcase
+
+  counter_access_illegal = 1'b0;
+  if (counter_access) begin
+    unique case (current_privilege_q)
+      PRIVILEGE_S:
+        counter_access_illegal = !mcounteren_q[counter_enable_bit];
+      PRIVILEGE_U:
+        counter_access_illegal = !mcounteren_q[counter_enable_bit] ||
+                                 !scounteren_q[counter_enable_bit];
+      default: counter_access_illegal = 1'b0;
+    endcase
+  end
+end
+
+always_comb begin
+  mstatus_write_value = wr_data & MSTATUS_WRITABLE_MASK;
+  unique case (wr_data[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB])
+    PRIVILEGE_U,
+    PRIVILEGE_S,
+    PRIVILEGE_M: begin
+    end
+    default:
+      mstatus_write_value[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB] = PRIVILEGE_M;
+  endcase
+end
+
+always_comb begin
+  unique case (rd_addr)
+    CSR_SSTATUS, CSR_SIE, CSR_STVEC, CSR_SCOUNTEREN, CSR_SSCRATCH, CSR_SEPC,
     CSR_SCAUSE, CSR_STVAL, CSR_SIP, CSR_SATP,
     CSR_MSTATUS, CSR_MISA, CSR_MEDELEG, CSR_MIDELEG, CSR_MIE, CSR_MTVEC,
+    CSR_MCOUNTEREN, CSR_MSTATUSH,
     CSR_MSCRATCH, CSR_MEPC, CSR_MCAUSE, CSR_MTVAL, CSR_MIP,
-    CSR_MCYCLE, CSR_MINSTRET, CSR_MVENDORID, CSR_MARCHID,
+    CSR_MCYCLE, CSR_MINSTRET, CSR_MCYCLEH, CSR_MINSTRETH,
+    CSR_CYCLE, CSR_TIME, CSR_INSTRET, CSR_CYCLEH, CSR_TIMEH, CSR_INSTRETH,
+    CSR_MVENDORID, CSR_MARCHID,
     CSR_MIMPID, CSR_MHARTID, CSR_MCONFIGPTR: csr_implemented = 1'b1;
     default:                  csr_implemented = 1'b0;
   endcase
@@ -185,7 +263,11 @@ always_comb begin
   access_illegal = !csr_implemented ||
                    (rd_addr[9:8] == 2'b10) ||
                    (rd_addr[9:8] > current_privilege_q) ||
-                   (access_wr_en && (rd_addr[11:10] == 2'b11));
+                   (access_wr_en && (rd_addr[11:10] == 2'b11)) ||
+                   counter_access_illegal ||
+                   ((current_privilege_q == PRIVILEGE_S) &&
+                    mstatus_q[MSTATUS_TVM_BIT] &&
+                    (rd_addr == CSR_SATP));
 end
 
 always_comb begin
@@ -211,6 +293,7 @@ always_comb begin
     CSR_SSTATUS:  rd_data = sstatus_value;
     CSR_SIE:      rd_data = sie_value;
     CSR_STVEC:    rd_data = stvec_q;
+    CSR_SCOUNTEREN: rd_data = scounteren_q;
     CSR_SSCRATCH: rd_data = sscratch_q;
     CSR_SEPC:     rd_data = sepc_q;
     CSR_SCAUSE:   rd_data = scause_q;
@@ -223,13 +306,23 @@ always_comb begin
     CSR_MIDELEG:  rd_data = mideleg_q;
     CSR_MIE:      rd_data = mie_q;
     CSR_MTVEC:    rd_data = mtvec_q;
+    CSR_MCOUNTEREN: rd_data = mcounteren_q;
+    CSR_MSTATUSH: rd_data = 32'h0;
     CSR_MSCRATCH: rd_data = mscratch_q;
     CSR_MEPC:     rd_data = mepc_q;
     CSR_MCAUSE:   rd_data = mcause_q;
     CSR_MTVAL:    rd_data = mtval_q;
     CSR_MIP:      rd_data = mip_value;
-    CSR_MCYCLE:   rd_data = mcycle_q;
-    CSR_MINSTRET: rd_data = minstret_q;
+    CSR_MCYCLE,
+    CSR_CYCLE:    rd_data = mcycle_q[31:0];
+    CSR_MINSTRET,
+    CSR_INSTRET:  rd_data = minstret_q[31:0];
+    CSR_MCYCLEH,
+    CSR_CYCLEH:   rd_data = mcycle_q[63:32];
+    CSR_MINSTRETH,
+    CSR_INSTRETH: rd_data = minstret_q[63:32];
+    CSR_TIME:     rd_data = time_value[31:0];
+    CSR_TIMEH:    rd_data = time_value[63:32];
     CSR_MVENDORID,
     CSR_MARCHID,
     CSR_MIMPID,
@@ -241,11 +334,15 @@ always_comb begin
   if (wr_en && (wr_addr == rd_addr)) begin
     unique case (rd_addr)
       CSR_SSTATUS: rd_data = wr_data & SSTATUS_MASK;
+      CSR_SCOUNTEREN: rd_data = wr_data & COUNTER_ENABLE_MASK;
       CSR_SIE:     rd_data = wr_data & mideleg_q & SUPERVISOR_IRQ_MASK;
       CSR_SIP:     rd_data = (sip_value & ~SIP_SW_WRITABLE_MASK) |
                                   (wr_data & SIP_SW_WRITABLE_MASK & mideleg_q);
       CSR_SATP:    rd_data = 32'h0;
+      CSR_MSTATUS: rd_data = mstatus_write_value;
       CSR_MISA:    rd_data = MISA_VALUE;
+      CSR_MCOUNTEREN: rd_data = wr_data & COUNTER_ENABLE_MASK;
+      CSR_MSTATUSH: rd_data = 32'h0;
       CSR_MEDELEG: rd_data = wr_data & SUPPORTED_EXCEPTION_DELEG_MASK;
       CSR_MIDELEG: rd_data = wr_data & SUPERVISOR_IRQ_MASK;
       CSR_MIE:     rd_data = wr_data & SUPPORTED_IRQ_MASK;
@@ -267,8 +364,10 @@ always_ff @(posedge clk or negedge reset_n) begin
     mepc_q <= 32'h0;
     mcause_q <= 32'h0;
     mtval_q <= 32'h0;
-    mcycle_q <= 32'h0;
-    minstret_q <= 32'h0;
+    mcycle_q <= 64'h0;
+    minstret_q <= 64'h0;
+    mcounteren_q <= 32'h0;
+    scounteren_q <= 32'h0;
     stvec_q <= 32'h0;
     sscratch_q <= 32'h0;
     sepc_q <= 32'h0;
@@ -305,6 +404,9 @@ always_ff @(posedge clk or negedge reset_n) begin
       mstatus_q[MSTATUS_MIE_BIT] <= mstatus_q[MSTATUS_MPIE_BIT];
       mstatus_q[MSTATUS_MPIE_BIT] <= 1'b1;
       mstatus_q[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB] <= PRIVILEGE_U;
+      if (mstatus_q[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB] != PRIVILEGE_M) begin
+        mstatus_q[MSTATUS_MPRV_BIT] <= 1'b0;
+      end
       unique case (mstatus_q[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB])
         PRIVILEGE_U: current_privilege_q <= PRIVILEGE_U;
         PRIVILEGE_S: current_privilege_q <= PRIVILEGE_S;
@@ -314,6 +416,7 @@ always_ff @(posedge clk or negedge reset_n) begin
       mstatus_q[MSTATUS_SIE_BIT] <= mstatus_q[MSTATUS_SPIE_BIT];
       mstatus_q[MSTATUS_SPIE_BIT] <= 1'b1;
       mstatus_q[MSTATUS_SPP_BIT] <= 1'b0;
+      mstatus_q[MSTATUS_MPRV_BIT] <= 1'b0;
       current_privilege_q <= mstatus_q[MSTATUS_SPP_BIT] ? PRIVILEGE_S : PRIVILEGE_U;
     end else if (wr_en) begin
       unique case (wr_addr)
@@ -322,6 +425,7 @@ always_ff @(posedge clk or negedge reset_n) begin
         CSR_SIE:      mie_q <= (mie_q & ~(mideleg_q & SUPERVISOR_IRQ_MASK)) |
                               (wr_data & mideleg_q & SUPERVISOR_IRQ_MASK);
         CSR_STVEC:    stvec_q <= wr_data;
+        CSR_SCOUNTEREN: scounteren_q <= wr_data & COUNTER_ENABLE_MASK;
         CSR_SSCRATCH: sscratch_q <= wr_data;
         CSR_SEPC:     sepc_q <= wr_data;
         CSR_SCAUSE:   scause_q <= wr_data;
@@ -331,8 +435,11 @@ always_ff @(posedge clk or negedge reset_n) begin
                           (wr_data & SIP_SW_WRITABLE_MASK & mideleg_q);
         CSR_SATP: begin
         end
-        CSR_MSTATUS:  mstatus_q <= wr_data;
+        CSR_MSTATUS:  mstatus_q <= mstatus_write_value;
         CSR_MISA: begin
+        end
+        CSR_MCOUNTEREN: mcounteren_q <= wr_data & COUNTER_ENABLE_MASK;
+        CSR_MSTATUSH: begin
         end
         CSR_MEDELEG:  medeleg_q <= wr_data & SUPPORTED_EXCEPTION_DELEG_MASK;
         CSR_MIDELEG:  mideleg_q <= wr_data & SUPERVISOR_IRQ_MASK;
@@ -343,8 +450,10 @@ always_ff @(posedge clk or negedge reset_n) begin
         CSR_MCAUSE:   mcause_q <= wr_data;
         CSR_MTVAL:    mtval_q <= wr_data;
         CSR_MIP:      mip_supervisor_sw_q <= wr_data & MIP_SW_WRITABLE_MASK;
-        CSR_MCYCLE:   mcycle_q <= wr_data;
-        CSR_MINSTRET: minstret_q <= wr_data;
+        CSR_MCYCLE:   mcycle_q <= {mcycle_q[63:32], wr_data};
+        CSR_MINSTRET: minstret_q <= {minstret_q[63:32], wr_data};
+        CSR_MCYCLEH:  mcycle_q <= {wr_data, mcycle_q[31:0]};
+        CSR_MINSTRETH: minstret_q <= {wr_data, minstret_q[31:0]};
         default: begin
         end
       endcase

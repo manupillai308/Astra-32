@@ -36,13 +36,15 @@ _start:
     addi    x1, x1, 0x122       # SUM | MXR | SPP | SPIE | SIE
     csrw    sstatus, x1
     csrr    x2, mstatus
-    bne     x2, x1, fail
+    lui     x3, 0x80
+    addi    x3, x3, 0x122       # SUM remains zero while satp is Bare.
+    bne     x2, x3, fail
 
     lui     x1, 0x40
     addi    x1, x1, 0x12A       # Includes MIE, hidden by sstatus.
     csrw    mstatus, x1
     csrr    x2, sstatus
-    addi    x3, x1, -8
+    addi    x3, x0, 0x122
     bne     x2, x3, fail
 
     # Only currently supported synchronous exceptions are delegatable.

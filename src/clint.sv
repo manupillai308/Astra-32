@@ -12,7 +12,8 @@ module clint #(
   output logic        busy,
 
   output logic        msip,
-  output logic        mtip
+  output logic        mtip,
+  output logic [63:0] mtime
 );
 
 localparam logic [31:0] MSIP_ADDR        = BASE_ADDR + 32'h0000_0000;
@@ -28,6 +29,7 @@ logic [63:0] mtimecmp_q;
 assign busy = req && !wr_en;
 assign msip = msip_q;
 assign mtip = (mtime_q >= mtimecmp_q);
+assign mtime = mtime_q;
 
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) begin

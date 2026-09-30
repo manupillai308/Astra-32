@@ -54,6 +54,7 @@ logic        cpu_dmem_ready;
 logic        cpu_dmem_rd_data_valid;
 logic        clint_msip;
 logic        clint_mtip;
+logic [63:0] clint_mtime;
 logic [31:0] irq_pending;
 
 always_comb begin
@@ -68,6 +69,7 @@ cpu #(
   .clk                 (clk),
   .reset_n             (reset_n),
   .irq_pending         (irq_pending),
+  .time_value          (clint_mtime),
   .imem_req            (cpu_imem_req),
   .imem_addr           (cpu_imem_addr),
   .imem_data           (cpu_imem_data),
@@ -117,6 +119,7 @@ bus #(
   .mmio_led              (mmio_led),
   .clint_msip            (clint_msip),
   .clint_mtip            (clint_mtip),
+  .clint_mtime           (clint_mtime),
   .uart_rx               (uart_rx),
   .uart_tx               (uart_tx),
   .app_addr              (app_addr),
