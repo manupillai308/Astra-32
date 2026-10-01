@@ -49,6 +49,7 @@ module cpu #(
 logic [31:0] pc;
 logic        fetch_enable;
 logic        fetch_stall;
+logic        fetch_transaction_stall;
 logic        imem_fire;
 logic        imem_pending_q;
 logic        imem_inflight_q;
@@ -206,10 +207,12 @@ assign memory_stall = ex_mem.valid &&
                       ex_mem.dmem_req &&
                       !memory_complete;
 assign memory_complete = dmem_rd_data_valid || dmem_done_q;
-assign fetch_stall = fetch_enable || imem_pending_q || (imem_inflight_q && !imem_rd_data_valid);
+assign fetch_transaction_stall = imem_pending_q ||
+                                 (imem_inflight_q && !imem_rd_data_valid);
+assign fetch_stall = fetch_enable || fetch_transaction_stall;
 assign pipeline_stall = load_use_stall || memory_stall || fetch_stall;
 assign fetch_enable = !interrupt_request && !retire_squash_request && !branch_redirect &&
-                      !load_use_stall && !memory_stall &&
+                      !memory_stall &&
                       !retire_barrier_active &&
                       (ex_retire_barrier_action == RETIRE_BARRIER_NONE) &&
                       !imem_pending_q && !imem_inflight_q && !imem_done_q;
@@ -237,7 +240,7 @@ assign retire_barrier_active = (retire_barrier_state_q != RETIRE_BARRIER_IDLE);
 assign retire_barrier_start = (retire_barrier_state_q == RETIRE_BARRIER_IDLE) &&
                               (ex_retire_barrier_action != RETIRE_BARRIER_NONE) &&
                               !redirect_fire && !retire_squash &&
-                              !memory_stall && !fetch_stall;
+                              !memory_stall && !fetch_transaction_stall;
 assign retire_barrier_commit = (retire_barrier_state_q == RETIRE_BARRIER_DRAIN) &&
                                (((retire_barrier_action_q == RETIRE_BARRIER_TRAP_RETURN) &&
                                  (mret_commit || sret_commit)) ||
@@ -262,8 +265,8 @@ assign interrupt_request = irq_valid &&
                            !csr_commit &&
                            !memory_stall &&
                            (!ex_mem.valid || (ex_mem.retire_action == RETIRE_NORMAL));
-assign interrupt_take = interrupt_request && !fetch_stall;
-assign branch_redirect_fire = branch_redirect && !memory_stall && !fetch_stall;
+assign interrupt_take = interrupt_request && !fetch_transaction_stall;
+assign branch_redirect_fire = branch_redirect && !memory_stall && !fetch_transaction_stall;
 assign retire_barrier_resume_redirect =
     (retire_barrier_state_q == RETIRE_BARRIER_RECHECK) && !irq_valid;
 assign redirect_fire = trap_redirect || mret_redirect || sret_redirect || interrupt_take ||
@@ -283,7 +286,7 @@ assign retire_squash_request = ex_mem.valid &&
                                ((ex_mem.retire_action == RETIRE_TRAP) ||
                                 (ex_mem.retire_action == RETIRE_MRET) ||
                                 (ex_mem.retire_action == RETIRE_SRET));
-assign retire_squash = retire_squash_request && !memory_stall && !fetch_stall;
+assign retire_squash = retire_squash_request && !memory_stall && !fetch_transaction_stall;
 
 always_comb begin
   if (retire_barrier_state_q == RETIRE_BARRIER_RECHECK) begin
@@ -385,7 +388,9 @@ always_ff @(posedge clk or negedge reset_n) begin
     imem_pending_q <= 1'b0;
     imem_inflight_q <= 1'b0;
     imem_done_q <= 1'b0;
-    imem_req_pc_q <= retire_barrier_start ? ex_next_seq_pc : retire_barrier_resume_pc_q;
+    if (retire_barrier_active) begin
+      imem_req_pc_q <= retire_barrier_resume_pc_q;
+    end
   end else begin
     if (fetch_enable) begin
       imem_pending_q <= 1'b1;

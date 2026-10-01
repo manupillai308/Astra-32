@@ -28,7 +28,6 @@ logic [63:0] mtimecmp_q;
 
 assign busy = req && !wr_en;
 assign msip = msip_q;
-assign mtip = (mtime_q >= mtimecmp_q);
 assign mtime = mtime_q;
 
 always_ff @(posedge clk or negedge reset_n) begin
@@ -36,9 +35,12 @@ always_ff @(posedge clk or negedge reset_n) begin
     msip_q <= 1'b0;
     mtime_q <= 64'h0;
     mtimecmp_q <= 64'hffff_ffff_ffff_ffff;
+    mtip <= 1'b0;
     rd_data <= 32'h0;
   end else begin
     mtime_q <= mtime_q + 1'b1;
+    // Register the wide comparison before it enters CPU interrupt control.
+    mtip <= (mtime_q >= mtimecmp_q);
 
     if (req && wr_en) begin
       unique case (addr)
