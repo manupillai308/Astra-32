@@ -35,6 +35,7 @@ module control (
   output logic        csr_req,
   output csr_op_t     csr_op,
   output logic        csr_imm_sel,
+  output logic        fence_i,
   output retire_action_t retire_action,
   output trap_cause_t trap_cause
 );
@@ -49,7 +50,7 @@ logic       funct7_bit5;
 
 assign funct7_bit5 = funct7[5];
 
-control_t ctrl_r, ctrl_i, ctrl_s, ctrl_b, ctrl_u, ctrl_j, ctrl_system, ctrl;
+control_t ctrl_r, ctrl_i, ctrl_s, ctrl_b, ctrl_u, ctrl_j, ctrl_misc_mem, ctrl_system, ctrl;
 
 
 // --------------------------------------------------------
@@ -312,6 +313,29 @@ always_comb begin
 end
 
 // --------------------------------------------------------
+// FENCE / FENCE.I Control
+// --------------------------------------------------------
+
+always_comb begin
+    ctrl_misc_mem = '0;
+    ctrl_misc_mem.retire_action = RETIRE_TRAP;
+    ctrl_misc_mem.trap_cause = TRAP_CAUSE_ILLEGAL_INSTRUCTION;
+
+    unique case (funct3)
+        3'b000: begin
+            // Blocking, in-order memory accesses already satisfy FENCE.
+            ctrl_misc_mem = '0;
+        end
+        3'b001: begin
+            ctrl_misc_mem = '0;
+            ctrl_misc_mem.fence_i = 1'b1;
+        end
+        default: begin
+        end
+    endcase
+end
+
+// --------------------------------------------------------
 // SYSTEM / CSR Control
 // --------------------------------------------------------
 
@@ -377,6 +401,7 @@ always_comb begin
     else if (b_type) ctrl = ctrl_b;
     else if (u_type) ctrl = ctrl_u;
     else if (j_type) ctrl = ctrl_j;
+    else if (opcode == OPCODE_MISC_MEM) ctrl = ctrl_misc_mem;
     else if (system_type) ctrl = ctrl_system;
     else begin
         ctrl.retire_action = RETIRE_TRAP;
@@ -408,6 +433,7 @@ assign uses_rs2          = ctrl.uses_rs2;
 assign csr_req           = ctrl.csr_req;
 assign csr_op            = ctrl.csr_op;
 assign csr_imm_sel       = ctrl.csr_imm_select;
+assign fence_i           = ctrl.fence_i;
 assign retire_action     = ctrl.retire_action;
 assign trap_cause        = ctrl.trap_cause;
 

@@ -123,6 +123,7 @@ mem_size_t   id_dmem_size;
 logic        id_rf_wr_en;
 logic        id_uses_rs1, id_uses_rs2;
 logic        id_csr_req, id_csr_imm_sel;
+logic        id_fence_i;
 csr_op_t     id_csr_op;
 retire_action_t id_retire_action;
 trap_cause_t id_trap_cause;
@@ -145,6 +146,7 @@ logic        csr_commit;
 logic        trap_commit;
 logic        mret_commit;
 logic        sret_commit;
+logic        fence_i_commit;
 logic        retire_commit;
 logic        instret_commit;
 logic        mem_wb_committed;
@@ -233,6 +235,8 @@ always_comb begin
                ex_csr_wr_en &&
                !csr_access_illegal) begin
     ex_retire_barrier_action = RETIRE_BARRIER_INTERRUPT_RECHECK;
+  end else if (id_ex.valid && id_ex.fence_i) begin
+    ex_retire_barrier_action = RETIRE_BARRIER_FENCE_I;
   end
 end
 
@@ -244,7 +248,8 @@ assign retire_barrier_start = (retire_barrier_state_q == RETIRE_BARRIER_IDLE) &&
 assign retire_barrier_commit = (retire_barrier_state_q == RETIRE_BARRIER_DRAIN) &&
                                (((retire_barrier_action_q == RETIRE_BARRIER_TRAP_RETURN) &&
                                  (mret_commit || sret_commit)) ||
-                                ((retire_barrier_action_q == RETIRE_BARRIER_INTERRUPT_RECHECK) && csr_commit));
+                                ((retire_barrier_action_q == RETIRE_BARRIER_INTERRUPT_RECHECK) && csr_commit) ||
+                                ((retire_barrier_action_q == RETIRE_BARRIER_FENCE_I) && fence_i_commit));
 
 // --------------------------------------------------------
 // Branch / jump redirect
@@ -489,6 +494,7 @@ control u_control (
     .csr_req          (id_csr_req),
     .csr_op           (id_csr_op),
     .csr_imm_sel      (id_csr_imm_sel),
+    .fence_i          (id_fence_i),
     .retire_action    (id_retire_action),
     .trap_cause       (id_trap_cause)
 );
@@ -501,6 +507,7 @@ assign csr_commit = retire_commit && (mem_wb.retire_action == RETIRE_NORMAL) && 
 assign trap_commit = retire_commit && (mem_wb.retire_action == RETIRE_TRAP);
 assign mret_commit = retire_commit && (mem_wb.retire_action == RETIRE_MRET);
 assign sret_commit = retire_commit && (mem_wb.retire_action == RETIRE_SRET);
+assign fence_i_commit = retire_commit && mem_wb.fence_i;
 assign instret_commit = retire_commit && (mem_wb.retire_action != RETIRE_TRAP);
 
 register_file u_register_file (
@@ -636,6 +643,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     id_ex.csr_addr         <= id_csr_addr;
     id_ex.csr_op           <= id_csr_op;
     id_ex.csr_imm_sel      <= id_csr_imm_sel;
+    id_ex.fence_i          <= id_fence_i;
     id_ex.retire_action    <= id_retire_action;
     id_ex.trap             <= id_trap;
     id_ex.fwd_a_sel        <= id_fwd_a_sel;
@@ -788,6 +796,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     ex_mem.csr_wr_en        <= ex_csr_wr_en;
     ex_mem.csr_addr         <= id_ex.csr_addr;
     ex_mem.csr_wr_data      <= ex_csr_wr_data;
+    ex_mem.fence_i          <= id_ex.fence_i;
     ex_mem.retire_action    <= ex_retire_action;
     ex_mem.trap             <= ex_trap;
   end
@@ -864,6 +873,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     mem_wb.csr_wr_en      <= ex_mem.csr_wr_en;
     mem_wb.csr_addr       <= ex_mem.csr_addr;
     mem_wb.csr_wr_data    <= ex_mem.csr_wr_data;
+    mem_wb.fence_i        <= ex_mem.fence_i;
     mem_wb.retire_action  <= ex_mem.retire_action;
     mem_wb.trap           <= ex_mem.trap;
   end

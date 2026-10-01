@@ -17,6 +17,7 @@ typedef enum logic [6:0] {
   OPCODE_LUI = 7'h37,
   OPCODE_AUIPC = 7'h17,
   OPCODE_JAL = 7'h6F,
+  OPCODE_MISC_MEM = 7'h0F,
   OPCODE_SYSTEM = 7'h73
  } opcode_t;
 
@@ -183,7 +184,8 @@ typedef enum logic [1:0] {
 typedef enum logic [1:0] {
     RETIRE_BARRIER_NONE              = 2'b00,
     RETIRE_BARRIER_TRAP_RETURN       = 2'b01,
-    RETIRE_BARRIER_INTERRUPT_RECHECK = 2'b10
+    RETIRE_BARRIER_INTERRUPT_RECHECK = 2'b10,
+    RETIRE_BARRIER_FENCE_I           = 2'b11
 } retire_barrier_action_t;
 
 
@@ -204,6 +206,7 @@ typedef struct packed {
     logic      csr_req;             // CSR instruction
     csr_op_t   csr_op;              // RW/RS/RC operation
     logic      csr_imm_select;      // 1 = use zimm, 0 = use rs1 data
+    logic      fence_i;             // Instruction-fetch synchronization
 
     retire_action_t retire_action;  // Normal retire, trap entry, or mret
     trap_cause_t trap_cause;        // Decode-stage exception cause
@@ -264,6 +267,7 @@ typedef struct packed {
     logic [11:0] csr_addr;
     csr_op_t     csr_op;
     logic        csr_imm_sel;
+    logic        fence_i;
     retire_action_t retire_action;
     trap_payload_t trap;
     fwd_flag_t   fwd_a_sel;
@@ -293,6 +297,7 @@ typedef struct packed {
     logic        csr_wr_en;
     logic [11:0] csr_addr;
     logic [31:0] csr_wr_data;
+    logic        fence_i;
     retire_action_t retire_action;
     trap_payload_t trap;
 } ex_mem_t;
@@ -307,6 +312,7 @@ typedef struct packed {
     logic        csr_wr_en;
     logic [11:0] csr_addr;
     logic [31:0] csr_wr_data;
+    logic        fence_i;
     retire_action_t retire_action;
     trap_payload_t trap;
 } mem_wb_t;
