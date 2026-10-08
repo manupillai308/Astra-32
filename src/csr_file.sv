@@ -91,6 +91,7 @@ localparam logic [31:0] MISA_VALUE =
     (32'h1 << 30) |  // MXL=1: RV32
     (32'h1 << 20) |  // U: user mode
     (32'h1 << 18) |  // S: supervisor mode
+    (32'h1 << 12) |  // M: integer multiply/divide extension
     (32'h1 << 8);    // I: base integer ISA
 localparam logic [31:0] SSTATUS_MASK =
     (32'h1 << MSTATUS_SIE_BIT) |

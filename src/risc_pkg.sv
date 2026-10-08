@@ -142,6 +142,17 @@ typedef enum logic [1:0] {
     CSR_OP_RC = 2'b10
 } csr_op_t;
 
+typedef enum logic [2:0] {
+    MULDIV_MUL    = 3'b000,
+    MULDIV_MULH   = 3'b001,
+    MULDIV_MULHSU = 3'b010,
+    MULDIV_MULHU  = 3'b011,
+    MULDIV_DIV    = 3'b100,
+    MULDIV_DIVU   = 3'b101,
+    MULDIV_REM    = 3'b110,
+    MULDIV_REMU   = 3'b111
+} mul_div_op_t;
+
 typedef enum logic [1:0] {
     PRIVILEGE_U = 2'b00,
     PRIVILEGE_S = 2'b01,
@@ -207,6 +218,8 @@ typedef struct packed {
     csr_op_t   csr_op;              // RW/RS/RC operation
     logic      csr_imm_select;      // 1 = use zimm, 0 = use rs1 data
     logic      fence_i;             // Instruction-fetch synchronization
+    logic      mul_div_req;         // Multi-cycle RV32M operation
+    mul_div_op_t mul_div_op;
 
     retire_action_t retire_action;  // Normal retire, trap entry, or mret
     trap_cause_t trap_cause;        // Decode-stage exception cause
@@ -268,6 +281,8 @@ typedef struct packed {
     csr_op_t     csr_op;
     logic        csr_imm_sel;
     logic        fence_i;
+    logic        mul_div_req;
+    mul_div_op_t mul_div_op;
     retire_action_t retire_action;
     trap_payload_t trap;
     fwd_flag_t   fwd_a_sel;

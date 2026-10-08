@@ -5,7 +5,7 @@ _start:
 
     addi    x31, x0, 1
     csrr    x1, misa
-    lui     x2, 0x40140
+    lui     x2, 0x40141
     addi    x2, x2, 256
     bne     x1, x2, fail
 

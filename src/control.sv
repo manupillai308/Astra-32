@@ -36,6 +36,8 @@ module control (
   output csr_op_t     csr_op,
   output logic        csr_imm_sel,
   output logic        fence_i,
+  output logic        mul_div_req,
+  output mul_div_op_t mul_div_op,
   output retire_action_t retire_action,
   output trap_cause_t trap_cause
 );
@@ -64,7 +66,24 @@ always_comb begin
     ctrl_r.retire_action = RETIRE_TRAP;
     ctrl_r.trap_cause = TRAP_CAUSE_ILLEGAL_INSTRUCTION;
 
-    case (funct_r)
+    if (funct7 == 7'b0000001) begin
+        ctrl_r = '0;
+        ctrl_r.rf_write_enable = 1'b1;
+        ctrl_r.uses_rs1 = 1'b1;
+        ctrl_r.uses_rs2 = 1'b1;
+        ctrl_r.mul_div_req = 1'b1;
+
+        unique case (funct3)
+            3'b000: ctrl_r.mul_div_op = MULDIV_MUL;
+            3'b001: ctrl_r.mul_div_op = MULDIV_MULH;
+            3'b010: ctrl_r.mul_div_op = MULDIV_MULHSU;
+            3'b011: ctrl_r.mul_div_op = MULDIV_MULHU;
+            3'b100: ctrl_r.mul_div_op = MULDIV_DIV;
+            3'b101: ctrl_r.mul_div_op = MULDIV_DIVU;
+            3'b110: ctrl_r.mul_div_op = MULDIV_REM;
+            3'b111: ctrl_r.mul_div_op = MULDIV_REMU;
+        endcase
+    end else case (funct_r)
         R_ADD,
         R_SUB,
         R_AND,
@@ -434,6 +453,8 @@ assign csr_req           = ctrl.csr_req;
 assign csr_op            = ctrl.csr_op;
 assign csr_imm_sel       = ctrl.csr_imm_select;
 assign fence_i           = ctrl.fence_i;
+assign mul_div_req       = ctrl.mul_div_req;
+assign mul_div_op        = ctrl.mul_div_op;
 assign retire_action     = ctrl.retire_action;
 assign trap_cause        = ctrl.trap_cause;
 

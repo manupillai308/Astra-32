@@ -59,6 +59,7 @@ logic [31:0] imem_done_pc_q;
 logic [31:0] imem_done_data_q;
 logic        load_use_stall;
 logic        memory_stall;
+logic        execute_stall;
 logic        pipeline_stall;
 logic        branch_redirect;
 logic        trap_redirect;
@@ -124,7 +125,9 @@ logic        id_rf_wr_en;
 logic        id_uses_rs1, id_uses_rs2;
 logic        id_csr_req, id_csr_imm_sel;
 logic        id_fence_i;
+logic        id_mul_div_req;
 csr_op_t     id_csr_op;
+mul_div_op_t id_mul_div_op;
 retire_action_t id_retire_action;
 trap_cause_t id_trap_cause;
 trap_payload_t id_trap;
@@ -155,6 +158,16 @@ logic        dmem_fire;
 logic        dmem_done_q;
 logic [31:0] dmem_done_rd_data_q;
 logic        memory_complete;
+logic        mul_div_unit_req;
+logic        mul_div_unit_ready;
+logic        mul_div_resp_valid;
+logic        mul_div_fire;
+logic        mul_div_inflight_q;
+logic        mul_div_done_q;
+logic [31:0] mul_div_result;
+logic [31:0] mul_div_done_result_q;
+logic [31:0] ex_mul_div_result;
+logic        execute_complete;
 
 logic forward_a_from_ex_mem;
 logic forward_b_from_ex_mem;
@@ -212,9 +225,11 @@ assign memory_complete = dmem_rd_data_valid || dmem_done_q;
 assign fetch_transaction_stall = imem_pending_q ||
                                  (imem_inflight_q && !imem_rd_data_valid);
 assign fetch_stall = fetch_enable || fetch_transaction_stall;
-assign pipeline_stall = load_use_stall || memory_stall || fetch_stall;
+assign execute_complete = mul_div_resp_valid || mul_div_done_q;
+assign execute_stall = id_ex.valid && id_ex.mul_div_req && !execute_complete;
+assign pipeline_stall = load_use_stall || memory_stall || fetch_stall || execute_stall;
 assign fetch_enable = !interrupt_request && !retire_squash_request && !branch_redirect &&
-                      !memory_stall &&
+                      !memory_stall && !execute_stall &&
                       !retire_barrier_active &&
                       (ex_retire_barrier_action == RETIRE_BARRIER_NONE) &&
                       !imem_pending_q && !imem_inflight_q && !imem_done_q;
@@ -268,7 +283,7 @@ assign interrupt_request = irq_valid &&
                            !mret_commit &&
                            !sret_commit &&
                            !csr_commit &&
-                           !memory_stall &&
+                           !memory_stall && !execute_stall &&
                            (!ex_mem.valid || (ex_mem.retire_action == RETIRE_NORMAL));
 assign interrupt_take = interrupt_request && !fetch_transaction_stall;
 assign branch_redirect_fire = branch_redirect && !memory_stall && !fetch_transaction_stall;
@@ -411,11 +426,12 @@ always_ff @(posedge clk or negedge reset_n) begin
       imem_inflight_q <= 1'b0;
     end
 
-    if (imem_rd_data_valid && (load_use_stall || memory_stall)) begin
+    if (imem_rd_data_valid && (load_use_stall || memory_stall || execute_stall)) begin
       imem_done_q <= 1'b1;
       imem_done_pc_q <= imem_req_pc_q;
       imem_done_data_q <= imem_data;
-    end else if (imem_done_q && !load_use_stall && !memory_stall && !fetch_stall) begin
+    end else if (imem_done_q && !load_use_stall && !memory_stall &&
+                 !fetch_stall && !execute_stall) begin
       imem_done_q <= 1'b0;
     end
   end
@@ -495,6 +511,8 @@ control u_control (
     .csr_op           (id_csr_op),
     .csr_imm_sel      (id_csr_imm_sel),
     .fence_i          (id_fence_i),
+    .mul_div_req      (id_mul_div_req),
+    .mul_div_op       (id_mul_div_op),
     .retire_action    (id_retire_action),
     .trap_cause       (id_trap_cause)
 );
@@ -612,7 +630,7 @@ end
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) id_ex <= '0;
   else if (redirect_fire || retire_squash) id_ex <= '0;
-  else if (memory_stall || fetch_stall) begin
+  else if (memory_stall || fetch_stall || execute_stall) begin
     // Hold pipeline state while memory or instruction fetch is waiting.
   end
   else if (retire_barrier_start || retire_barrier_active) id_ex <= '0;
@@ -644,6 +662,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     id_ex.csr_op           <= id_csr_op;
     id_ex.csr_imm_sel      <= id_csr_imm_sel;
     id_ex.fence_i          <= id_fence_i;
+    id_ex.mul_div_req      <= id_mul_div_req;
+    id_ex.mul_div_op       <= id_mul_div_op;
     id_ex.retire_action    <= id_retire_action;
     id_ex.trap             <= id_trap;
     id_ex.fwd_a_sel        <= id_fwd_a_sel;
@@ -682,6 +702,43 @@ always_comb begin
   endcase
 end
 
+assign mul_div_unit_req = id_ex.valid && id_ex.mul_div_req &&
+                          !mul_div_inflight_q && !mul_div_done_q &&
+                          !redirect_fire && !retire_squash;
+assign mul_div_fire = mul_div_unit_req && mul_div_unit_ready;
+assign ex_mul_div_result = mul_div_done_q ? mul_div_done_result_q : mul_div_result;
+
+mul_div u_mul_div (
+    .clk        (clk),
+    .reset_n    (reset_n),
+    .req        (mul_div_unit_req),
+    .ready      (mul_div_unit_ready),
+    .op         (id_ex.mul_div_op),
+    .lhs        (rs1_data_resolved),
+    .rhs        (rs2_data_resolved),
+    .resp_valid (mul_div_resp_valid),
+    .result     (mul_div_result)
+);
+
+always_ff @(posedge clk or negedge reset_n) begin
+  if (!reset_n) begin
+    mul_div_inflight_q <= 1'b0;
+    mul_div_done_q <= 1'b0;
+    mul_div_done_result_q <= 32'h0;
+  end else begin
+    if (mul_div_fire) begin
+      mul_div_inflight_q <= 1'b1;
+    end
+    if (mul_div_resp_valid) begin
+      mul_div_inflight_q <= 1'b0;
+      mul_div_done_result_q <= mul_div_result;
+      mul_div_done_q <= memory_stall || fetch_stall;
+    end else if (mul_div_done_q && !memory_stall && !fetch_stall) begin
+      mul_div_done_q <= 1'b0;
+    end
+  end
+end
+
 assign ex_alu_a = id_ex.op1_sel ? id_ex.pc        : rs1_data_resolved;
 assign ex_alu_b = id_ex.op2_sel ? id_ex.immediate : rs2_data_resolved;
 
@@ -710,7 +767,7 @@ assign ex_next_seq_pc   = id_ex.pc + 32'd4;
 
 always_comb begin
   unique case (id_ex.rf_wr_data_sel)
-    WB_SRC_ALU: ex_mem_forward_data = ex_alu_res;
+    WB_SRC_ALU: ex_mem_forward_data = id_ex.mul_div_req ? ex_mul_div_result : ex_alu_res;
     WB_SRC_IMM: ex_mem_forward_data = id_ex.immediate;
     WB_SRC_PC:  ex_mem_forward_data = ex_next_seq_pc;
     WB_SRC_CSR: ex_mem_forward_data = ex_csr_old_data;
@@ -774,7 +831,7 @@ end
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) ex_mem <= '0;
   else if (redirect_fire) ex_mem <= '0;
-  else if (memory_stall || fetch_stall) begin
+  else if (memory_stall || fetch_stall || execute_stall) begin
     // Hold active pipeline state until the stalled interface completes.
   end
   else if (retire_squash) ex_mem <= '0;
@@ -830,10 +887,10 @@ always_ff @(posedge clk or negedge reset_n) begin
       dmem_inflight <= 1'b0;
     end
 
-    if (dmem_rd_data_valid && fetch_stall) begin
+    if (dmem_rd_data_valid && (fetch_stall || execute_stall)) begin
       dmem_done_q <= 1'b1;
       dmem_done_rd_data_q <= dmem_rd_data;
-    end else if (!memory_stall && !fetch_stall) begin
+    end else if (!memory_stall && !fetch_stall && !execute_stall) begin
       dmem_done_q <= 1'b0;
     end
   end
@@ -860,7 +917,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     mem_wb <= '0;
     mem_wb_committed <= 1'b0;
   end
-  else if (memory_stall || fetch_stall) begin
+  else if (memory_stall || fetch_stall || execute_stall) begin
     // Hold forwarding data stable, but allow this WB slot to retire once.
     if (retire_commit) mem_wb_committed <= 1'b1;
   end
