@@ -1,6 +1,6 @@
-# RISC-V FPGA SoC
+# Astra-32
 
-This project is a small RISC-V SoC built to run Linux on an FPGA.
+A small RISC-V SoC built to run Linux on an FPGA.
 
 The goal is not to build the fastest processor. The goal is to keep the CPU,
 memory system, peripherals, and boot process simple enough to study while
@@ -9,7 +9,8 @@ still building a complete Linux-capable system.
 The current core implements **RV32IM_Zicsr_Zifencei** and supports machine,
 supervisor, and user privilege modes.
 
-> This is still a work in progress. It does not boot Linux yet.
+>[!IMPORTANT]
+> This is still a work in progress 🚧. It does not boot Linux yet.
 
 ## Features
 
