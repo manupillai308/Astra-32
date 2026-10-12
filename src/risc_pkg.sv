@@ -18,6 +18,7 @@ typedef enum logic [6:0] {
   OPCODE_AUIPC = 7'h17,
   OPCODE_JAL = 7'h6F,
   OPCODE_MISC_MEM = 7'h0F,
+  OPCODE_ATOMIC = 7'h2F,
   OPCODE_SYSTEM = 7'h73
  } opcode_t;
 
@@ -153,6 +154,20 @@ typedef enum logic [2:0] {
     MULDIV_REMU   = 3'b111
 } mul_div_op_t;
 
+typedef enum logic [3:0] {
+    ATOMIC_LR,
+    ATOMIC_SC,
+    ATOMIC_SWAP,
+    ATOMIC_ADD,
+    ATOMIC_XOR,
+    ATOMIC_AND,
+    ATOMIC_OR,
+    ATOMIC_MIN,
+    ATOMIC_MAX,
+    ATOMIC_MINU,
+    ATOMIC_MAXU
+} atomic_op_t;
+
 typedef enum logic [1:0] {
     PRIVILEGE_U = 2'b00,
     PRIVILEGE_S = 2'b01,
@@ -220,6 +235,8 @@ typedef struct packed {
     logic      fence_i;             // Instruction-fetch synchronization
     logic      mul_div_req;         // Multi-cycle RV32M operation
     mul_div_op_t mul_div_op;
+    logic      atomic_req;          // Multi-transaction RV32A operation
+    atomic_op_t atomic_op;
 
     retire_action_t retire_action;  // Normal retire, trap entry, or mret
     trap_cause_t trap_cause;        // Decode-stage exception cause
@@ -283,6 +300,8 @@ typedef struct packed {
     logic        fence_i;
     logic        mul_div_req;
     mul_div_op_t mul_div_op;
+    logic        atomic_req;
+    atomic_op_t  atomic_op;
     retire_action_t retire_action;
     trap_payload_t trap;
     fwd_flag_t   fwd_a_sel;
@@ -305,6 +324,8 @@ typedef struct packed {
     logic        dmem_wr_en;
     mem_size_t   dmem_size;
     logic        dmem_zero_extend;
+    logic        atomic_req;
+    atomic_op_t  atomic_op;
     // WB controls
     logic        rf_wr_en;
     logic [31:0] forward_data;

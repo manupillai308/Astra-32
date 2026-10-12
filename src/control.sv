@@ -18,6 +18,7 @@ module control (
   input  logic [6:0] funct7,
   input  logic [6:0] opcode,
   input  logic [11:0] csr_addr,
+  input  logic [4:0] rs2_addr,
 
   // Outputs
   output logic        pc_sel,
@@ -38,6 +39,8 @@ module control (
   output logic        fence_i,
   output logic        mul_div_req,
   output mul_div_op_t mul_div_op,
+  output logic        atomic_req,
+  output atomic_op_t  atomic_op,
   output retire_action_t retire_action,
   output trap_cause_t trap_cause
 );
@@ -52,7 +55,8 @@ logic       funct7_bit5;
 
 assign funct7_bit5 = funct7[5];
 
-control_t ctrl_r, ctrl_i, ctrl_s, ctrl_b, ctrl_u, ctrl_j, ctrl_misc_mem, ctrl_system, ctrl;
+control_t ctrl_r, ctrl_i, ctrl_s, ctrl_b, ctrl_u, ctrl_j, ctrl_misc_mem, ctrl_atomic,
+          ctrl_system, ctrl;
 
 
 // --------------------------------------------------------
@@ -355,6 +359,90 @@ always_comb begin
 end
 
 // --------------------------------------------------------
+// Atomic Control
+// --------------------------------------------------------
+
+always_comb begin
+    ctrl_atomic = '0;
+    ctrl_atomic.retire_action = RETIRE_TRAP;
+    ctrl_atomic.trap_cause = TRAP_CAUSE_ILLEGAL_INSTRUCTION;
+
+    if (funct3 == 3'b010) begin
+        unique case (funct7[6:2])
+            5'b00010: begin
+                if (rs2_addr == 5'h0) begin
+                    ctrl_atomic = '0;
+                    ctrl_atomic.atomic_op = ATOMIC_LR;
+                end
+            end
+            5'b00011: begin 
+                ctrl_atomic = '0; 
+                ctrl_atomic.atomic_op = ATOMIC_SC;   
+                ctrl_atomic.mem_write = 1'b1; 
+            end
+            5'b00001: begin 
+                ctrl_atomic = '0; 
+                ctrl_atomic.atomic_op = ATOMIC_SWAP; 
+                ctrl_atomic.mem_write = 1'b1; 
+            end
+            5'b00000: begin 
+                ctrl_atomic = '0; 
+                ctrl_atomic.atomic_op = ATOMIC_ADD;  
+                ctrl_atomic.mem_write = 1'b1; 
+            end
+            5'b00100: begin 
+                ctrl_atomic = '0; 
+                ctrl_atomic.atomic_op = ATOMIC_XOR;  
+                ctrl_atomic.mem_write = 1'b1; 
+            end
+            5'b01100: begin 
+                ctrl_atomic = '0; 
+                ctrl_atomic.atomic_op = ATOMIC_AND;  
+                ctrl_atomic.mem_write = 1'b1; 
+            end
+            5'b01000: begin 
+                ctrl_atomic = '0; 
+                ctrl_atomic.atomic_op = ATOMIC_OR;   
+                ctrl_atomic.mem_write = 1'b1; 
+            end
+            5'b10000: begin 
+                ctrl_atomic = '0; 
+                ctrl_atomic.atomic_op = ATOMIC_MIN;  
+                ctrl_atomic.mem_write = 1'b1; 
+            end
+            5'b10100: begin 
+                ctrl_atomic = '0; 
+                ctrl_atomic.atomic_op = ATOMIC_MAX;  
+                ctrl_atomic.mem_write = 1'b1; 
+            end
+            5'b11000: begin 
+                ctrl_atomic = '0; 
+                ctrl_atomic.atomic_op = ATOMIC_MINU; 
+                ctrl_atomic.mem_write = 1'b1; 
+            end
+            5'b11100: begin 
+                ctrl_atomic = '0; 
+                ctrl_atomic.atomic_op = ATOMIC_MAXU; 
+                ctrl_atomic.mem_write = 1'b1; 
+            end
+            default: begin
+            end
+        endcase
+
+        if (ctrl_atomic.retire_action == RETIRE_NORMAL) begin
+            ctrl_atomic.mem_valid = 1'b1;
+            ctrl_atomic.mem_size = WORD;
+            ctrl_atomic.rf_write_enable = 1'b1;
+            ctrl_atomic.uses_rs1 = 1'b1;
+            ctrl_atomic.uses_rs2 = (ctrl_atomic.atomic_op != ATOMIC_LR);
+            ctrl_atomic.alu_src_b_select = 1'b1;
+            ctrl_atomic.wb_src = WB_SRC_MEM;
+            ctrl_atomic.atomic_req = 1'b1;
+        end
+    end
+end
+
+// --------------------------------------------------------
 // SYSTEM / CSR Control
 // --------------------------------------------------------
 
@@ -421,6 +509,7 @@ always_comb begin
     else if (u_type) ctrl = ctrl_u;
     else if (j_type) ctrl = ctrl_j;
     else if (opcode == OPCODE_MISC_MEM) ctrl = ctrl_misc_mem;
+    else if (opcode == OPCODE_ATOMIC) ctrl = ctrl_atomic;
     else if (system_type) ctrl = ctrl_system;
     else begin
         ctrl.retire_action = RETIRE_TRAP;
@@ -455,6 +544,8 @@ assign csr_imm_sel       = ctrl.csr_imm_select;
 assign fence_i           = ctrl.fence_i;
 assign mul_div_req       = ctrl.mul_div_req;
 assign mul_div_op        = ctrl.mul_div_op;
+assign atomic_req        = ctrl.atomic_req;
+assign atomic_op         = ctrl.atomic_op;
 assign retire_action     = ctrl.retire_action;
 assign trap_cause        = ctrl.trap_cause;
 

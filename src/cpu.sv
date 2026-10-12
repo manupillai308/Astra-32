@@ -126,8 +126,10 @@ logic        id_uses_rs1, id_uses_rs2;
 logic        id_csr_req, id_csr_imm_sel;
 logic        id_fence_i;
 logic        id_mul_div_req;
+logic        id_atomic_req;
 csr_op_t     id_csr_op;
 mul_div_op_t id_mul_div_op;
+atomic_op_t  id_atomic_op;
 retire_action_t id_retire_action;
 trap_cause_t id_trap_cause;
 trap_payload_t id_trap;
@@ -157,6 +159,20 @@ logic        dmem_inflight;
 logic        dmem_fire;
 logic        dmem_done_q;
 logic [31:0] dmem_done_rd_data_q;
+logic        normal_dmem_req;
+logic        atomic_unit_req;
+logic        atomic_unit_ready;
+logic        atomic_fire;
+logic        atomic_inflight_q;
+logic        atomic_resp_valid;
+logic        atomic_done_q;
+logic [31:0] atomic_result;
+logic [31:0] atomic_done_result_q;
+logic        atomic_mem_req;
+logic        atomic_mem_wr_en;
+logic [31:0] atomic_mem_addr;
+logic [31:0] atomic_mem_wr_data;
+logic        atomic_exclusive_active;
 logic        memory_complete;
 logic        mul_div_unit_req;
 logic        mul_div_unit_ready;
@@ -216,12 +232,14 @@ trap_payload_t csr_trap;
 //   and the regfile write at end of WB lands BEFORE the
 //   next instruction's ID-stage regfile read.
 // --------------------------------------------------------
-assign dmem_fire = dmem_req && dmem_ready;
+assign dmem_fire = normal_dmem_req && dmem_ready;
 assign memory_stall = ex_mem.valid &&
                       (ex_mem.retire_action == RETIRE_NORMAL) &&
                       ex_mem.dmem_req &&
                       !memory_complete;
-assign memory_complete = dmem_rd_data_valid || dmem_done_q;
+assign memory_complete = ex_mem.atomic_req ?
+                         (atomic_resp_valid || atomic_done_q) :
+                         (dmem_rd_data_valid || dmem_done_q);
 assign fetch_transaction_stall = imem_pending_q ||
                                  (imem_inflight_q && !imem_rd_data_valid);
 assign fetch_stall = fetch_enable || fetch_transaction_stall;
@@ -494,6 +512,7 @@ control u_control (
     .funct7           (id_funct7),
     .opcode           (id_opcode),
     .csr_addr         (id_csr_addr),
+    .rs2_addr         (id_rs2_addr),
 
     .pc_sel           (id_pc_sel),
     .op1_sel          (id_op1_sel),
@@ -513,6 +532,8 @@ control u_control (
     .fence_i          (id_fence_i),
     .mul_div_req      (id_mul_div_req),
     .mul_div_op       (id_mul_div_op),
+    .atomic_req       (id_atomic_req),
+    .atomic_op        (id_atomic_op),
     .retire_action    (id_retire_action),
     .trap_cause       (id_trap_cause)
 );
@@ -664,6 +685,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     id_ex.fence_i          <= id_fence_i;
     id_ex.mul_div_req      <= id_mul_div_req;
     id_ex.mul_div_op       <= id_mul_div_op;
+    id_ex.atomic_req       <= id_atomic_req;
+    id_ex.atomic_op        <= id_atomic_op;
     id_ex.retire_action    <= id_retire_action;
     id_ex.trap             <= id_trap;
     id_ex.fwd_a_sel        <= id_fwd_a_sel;
@@ -681,7 +704,7 @@ end
 // LOAD USE HAZARD: stall
 // N:   lw   x5, 0(x0)
 // N+1: addi x6, x5, 3
-assign load_use_stall = id_ex.valid && id_ex.dmem_req && !id_ex.dmem_wr_en // id_ex is a load
+assign load_use_stall = id_ex.valid && id_ex.load_from_memory
                         && ((id_uses_rs1 && (id_ex.rd_addr == id_rs1_addr)) ||
                             (id_uses_rs2 && (id_ex.rd_addr == id_rs2_addr)))
                         && (id_ex.rd_addr != 0);
@@ -847,6 +870,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     ex_mem.dmem_wr_en       <= id_ex.dmem_wr_en;
     ex_mem.dmem_size        <= id_ex.dmem_size;
     ex_mem.dmem_zero_extend <= id_ex.dmem_zero_extend;
+    ex_mem.atomic_req       <= id_ex.atomic_req;
+    ex_mem.atomic_op        <= id_ex.atomic_op;
     ex_mem.rf_wr_en         <= id_ex.rf_wr_en;
     ex_mem.forward_data     <= ex_mem_forward_data;
     ex_mem.load_from_memory <= id_ex.load_from_memory;
@@ -864,23 +889,58 @@ end
 //   Side effects are gated with ex_mem.valid so bubbles do not issue
 //   platform memory or MMIO transactions.
 // --------------------------------------------------------
-assign dmem_req         = ex_mem.valid &&
-                          (ex_mem.retire_action == RETIRE_NORMAL) &&
-                          ex_mem.dmem_req &&
-                          !dmem_inflight &&
-                          !dmem_done_q;
-assign dmem_wr_en       = ex_mem.dmem_wr_en;
-assign dmem_data_size   = ex_mem.dmem_size;
-assign dmem_addr        = ex_mem.alu_res;
-assign dmem_wr_data     = ex_mem.rs2_data;
-assign dmem_zero_extend = ex_mem.dmem_zero_extend;
+assign normal_dmem_req = ex_mem.valid &&
+                         (ex_mem.retire_action == RETIRE_NORMAL) &&
+                         ex_mem.dmem_req &&
+                         !ex_mem.atomic_req &&
+                         !dmem_inflight &&
+                         !dmem_done_q;
+
+assign atomic_unit_req = ex_mem.valid &&
+                         (ex_mem.retire_action == RETIRE_NORMAL) &&
+                         ex_mem.atomic_req &&
+                         !atomic_inflight_q &&
+                         !atomic_done_q;
+assign atomic_fire = atomic_unit_req && atomic_unit_ready;
+
+atomic_unit u_atomic_unit (
+    .clk                    (clk),
+    .reset_n                (reset_n),
+    .req                    (atomic_unit_req),
+    .ready                  (atomic_unit_ready),
+    .op                     (ex_mem.atomic_op),
+    .addr                   (ex_mem.alu_res),
+    .operand                (ex_mem.rs2_data),
+    .resp_valid             (atomic_resp_valid),
+    .result                 (atomic_result),
+    .mem_req                (atomic_mem_req),
+    .mem_wr_en              (atomic_mem_wr_en),
+    .mem_addr               (atomic_mem_addr),
+    .mem_wr_data            (atomic_mem_wr_data),
+    .mem_ready              (dmem_ready),
+    .mem_resp_valid         (dmem_rd_data_valid),
+    .mem_rd_data            (dmem_rd_data),
+    .clear_reservation      (trap_commit || interrupt_take),
+    .local_write_valid      (dmem_fire && ex_mem.dmem_wr_en),
+    .local_write_addr       (ex_mem.alu_res),
+    .external_write_valid   (1'b0),
+    .external_write_addr    (32'h0),
+    .exclusive_active       (atomic_exclusive_active)
+);
+
+assign dmem_req         = ex_mem.atomic_req ? atomic_mem_req : normal_dmem_req;
+assign dmem_wr_en       = ex_mem.atomic_req ? atomic_mem_wr_en : ex_mem.dmem_wr_en;
+assign dmem_data_size   = ex_mem.atomic_req ? WORD : ex_mem.dmem_size;
+assign dmem_addr        = ex_mem.atomic_req ? atomic_mem_addr : ex_mem.alu_res;
+assign dmem_wr_data     = ex_mem.atomic_req ? atomic_mem_wr_data : ex_mem.rs2_data;
+assign dmem_zero_extend = ex_mem.atomic_req ? 1'b0 : ex_mem.dmem_zero_extend;
 
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) begin
     dmem_inflight <= 1'b0;
     dmem_done_q <= 1'b0;
     dmem_done_rd_data_q <= 32'h0;
-  end else begin
+  end else if (!ex_mem.atomic_req) begin
     if (dmem_fire && !dmem_rd_data_valid) begin
       dmem_inflight <= 1'b1;
     end else if (dmem_rd_data_valid) begin
@@ -896,6 +956,26 @@ always_ff @(posedge clk or negedge reset_n) begin
   end
 end
 
+always_ff @(posedge clk or negedge reset_n) begin
+  if (!reset_n) begin
+    atomic_inflight_q <= 1'b0;
+    atomic_done_q <= 1'b0;
+    atomic_done_result_q <= 32'h0;
+  end else begin
+    if (atomic_fire) begin
+      atomic_inflight_q <= 1'b1;
+    end
+
+    if (atomic_resp_valid) begin
+      atomic_inflight_q <= 1'b0;
+      atomic_done_result_q <= atomic_result;
+      atomic_done_q <= fetch_stall || execute_stall;
+    end else if (atomic_done_q && !memory_stall && !fetch_stall && !execute_stall) begin
+      atomic_done_q <= 1'b0;
+    end
+  end
+end
+
 // --------------------------------------------------------
 // MEM / WB  register
 //   dmem_rd_data is provided by the SoC memory system in the WB cycle.
@@ -906,7 +986,9 @@ end
 // register_file at posedge, gated by (mem_wb.valid & rf_wr_en).
 // --------------------------------------------------------
 always_comb begin
-  if (ex_mem.load_from_memory)
+  if (ex_mem.atomic_req)
+    wb_data = atomic_done_q ? atomic_done_result_q : atomic_result;
+  else if (ex_mem.load_from_memory)
     wb_data = dmem_done_q ? dmem_done_rd_data_q : dmem_rd_data;
   else
     wb_data = ex_mem.forward_data;

@@ -6,7 +6,7 @@ _start:
     addi    x31, x0, 1
     csrr    x1, misa
     lui     x2, 0x40141
-    addi    x2, x2, 256
+    addi    x2, x2, 257
     bne     x1, x2, fail
 
     # misa is implemented as a constant WARL value for the current ISA.

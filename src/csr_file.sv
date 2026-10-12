@@ -89,6 +89,7 @@ localparam int MSTATUS_TW_BIT = 21;
 localparam int MSTATUS_TSR_BIT = 22;
 localparam logic [31:0] MISA_VALUE =
     (32'h1 << 30) |  // MXL=1: RV32
+    (32'h1 << 0)  |  // A: atomic extension
     (32'h1 << 20) |  // U: user mode
     (32'h1 << 18) |  // S: supervisor mode
     (32'h1 << 12) |  // M: integer multiply/divide extension
