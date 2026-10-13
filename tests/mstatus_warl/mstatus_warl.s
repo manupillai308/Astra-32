@@ -3,13 +3,13 @@
 _start:
     lui     x30, 0x10000
 
-    # Unsupported fields and SUM in Bare mode read as zero.
+    # Unsupported fields read as zero; implemented fields retain legal values.
     addi    x31, x0, 1
     addi    x1, x0, -1
     csrw    mstatus, x1
     csrr    x1, mstatus
-    lui     x2, 0x7a2
-    addi    x2, x2, -1622     # 0x007a19aa
+    lui     x2, 0x7e2
+    addi    x2, x2, -1622     # 0x007e19aa
     bne     x1, x2, fail
 
     # Reserved MPP=2 is coerced to the supported M-mode encoding.

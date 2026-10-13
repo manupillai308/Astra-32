@@ -88,6 +88,9 @@ logic                   retire_barrier_start;
 logic                   retire_barrier_commit;
 logic [31:0]            retire_barrier_resume_pc_q;
 logic                   retire_barrier_sret_q;
+logic [31:0]            sfence_vma_vaddr_q;
+logic [31:0]            sfence_vma_asid_q;
+logic                   sfence_vma_flush;
 
 // IF/ID equivalent: pc piped one cycle to align with the
 // sync imem output reg, which acts as IF/ID.instruction.
@@ -125,6 +128,7 @@ logic        id_rf_wr_en;
 logic        id_uses_rs1, id_uses_rs2;
 logic        id_csr_req, id_csr_imm_sel;
 logic        id_fence_i;
+logic        id_sfence_vma;
 logic        id_mul_div_req;
 logic        id_atomic_req;
 csr_op_t     id_csr_op;
@@ -152,6 +156,7 @@ logic        trap_commit;
 logic        mret_commit;
 logic        sret_commit;
 logic        fence_i_commit;
+logic        sfence_vma_commit;
 logic        retire_commit;
 logic        instret_commit;
 logic        mem_wb_committed;
@@ -205,6 +210,7 @@ logic        csr_access_illegal;
 logic        ex_illegal_csr_access;
 logic        ex_illegal_mret;
 logic        ex_illegal_sret;
+logic        ex_illegal_sfence_vma;
 logic [31:0] ex_system_instruction;
 privilege_mode_t current_privilege;
 retire_action_t ex_retire_action;
@@ -215,6 +221,12 @@ logic [31:0] csr_mtvec;
 logic [31:0] csr_stvec;
 logic [31:0] csr_mepc;
 logic [31:0] csr_sepc;
+logic [31:0] csr_satp;
+logic        csr_mstatus_mprv;
+privilege_mode_t csr_mstatus_mpp;
+logic        csr_mstatus_sum;
+logic        csr_mstatus_mxr;
+logic        csr_mstatus_tvm;
 logic        trap_to_supervisor;
 logic        csr_sret_blocked;
 logic        irq_valid;
@@ -270,6 +282,8 @@ always_comb begin
     ex_retire_barrier_action = RETIRE_BARRIER_INTERRUPT_RECHECK;
   end else if (id_ex.valid && id_ex.fence_i) begin
     ex_retire_barrier_action = RETIRE_BARRIER_FENCE_I;
+  end else if (id_ex.valid && id_ex.sfence_vma && !ex_illegal_sfence_vma) begin
+    ex_retire_barrier_action = RETIRE_BARRIER_SFENCE_VMA;
   end
 end
 
@@ -282,7 +296,9 @@ assign retire_barrier_commit = (retire_barrier_state_q == RETIRE_BARRIER_DRAIN) 
                                (((retire_barrier_action_q == RETIRE_BARRIER_TRAP_RETURN) &&
                                  (mret_commit || sret_commit)) ||
                                 ((retire_barrier_action_q == RETIRE_BARRIER_INTERRUPT_RECHECK) && csr_commit) ||
-                                ((retire_barrier_action_q == RETIRE_BARRIER_FENCE_I) && fence_i_commit));
+                                ((retire_barrier_action_q == RETIRE_BARRIER_FENCE_I) && fence_i_commit) ||
+                                ((retire_barrier_action_q == RETIRE_BARRIER_SFENCE_VMA) && sfence_vma_commit));
+assign sfence_vma_flush = sfence_vma_commit;
 
 // --------------------------------------------------------
 // Branch / jump redirect
@@ -364,6 +380,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     retire_barrier_action_q <= RETIRE_BARRIER_NONE;
     retire_barrier_resume_pc_q <= RESET_PC;
     retire_barrier_sret_q <= 1'b0;
+    sfence_vma_vaddr_q <= 32'h0;
+    sfence_vma_asid_q <= 32'h0;
   end else begin
     unique case (retire_barrier_state_q)
       RETIRE_BARRIER_IDLE: begin
@@ -372,6 +390,10 @@ always_ff @(posedge clk or negedge reset_n) begin
           retire_barrier_action_q <= ex_retire_barrier_action;
           retire_barrier_resume_pc_q <= ex_next_seq_pc;
           retire_barrier_sret_q <= (id_ex.retire_action == RETIRE_SRET);
+          if (ex_retire_barrier_action == RETIRE_BARRIER_SFENCE_VMA) begin
+            sfence_vma_vaddr_q <= rs1_data_resolved;
+            sfence_vma_asid_q <= rs2_data_resolved;
+          end
         end
       end
 
@@ -513,6 +535,7 @@ control u_control (
     .opcode           (id_opcode),
     .csr_addr         (id_csr_addr),
     .rs2_addr         (id_rs2_addr),
+    .rd_addr          (id_rd_addr),
 
     .pc_sel           (id_pc_sel),
     .op1_sel          (id_op1_sel),
@@ -530,6 +553,7 @@ control u_control (
     .csr_op           (id_csr_op),
     .csr_imm_sel      (id_csr_imm_sel),
     .fence_i          (id_fence_i),
+    .sfence_vma       (id_sfence_vma),
     .mul_div_req      (id_mul_div_req),
     .mul_div_op       (id_mul_div_op),
     .atomic_req       (id_atomic_req),
@@ -547,6 +571,7 @@ assign trap_commit = retire_commit && (mem_wb.retire_action == RETIRE_TRAP);
 assign mret_commit = retire_commit && (mem_wb.retire_action == RETIRE_MRET);
 assign sret_commit = retire_commit && (mem_wb.retire_action == RETIRE_SRET);
 assign fence_i_commit = retire_commit && mem_wb.fence_i;
+assign sfence_vma_commit = retire_commit && mem_wb.sfence_vma;
 assign instret_commit = retire_commit && (mem_wb.retire_action != RETIRE_TRAP);
 
 register_file u_register_file (
@@ -584,6 +609,12 @@ csr_file u_csr_file (
     .stvec       (csr_stvec),
     .mepc        (csr_mepc),
     .sepc        (csr_sepc),
+    .satp        (csr_satp),
+    .mstatus_mprv(csr_mstatus_mprv),
+    .mstatus_mpp (csr_mstatus_mpp),
+    .mstatus_sum (csr_mstatus_sum),
+    .mstatus_mxr (csr_mstatus_mxr),
+    .mstatus_tvm (csr_mstatus_tvm),
     .trap_to_supervisor(trap_to_supervisor),
     .sret_blocked(csr_sret_blocked),
     .current_privilege(current_privilege)
@@ -683,6 +714,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     id_ex.csr_op           <= id_csr_op;
     id_ex.csr_imm_sel      <= id_csr_imm_sel;
     id_ex.fence_i          <= id_fence_i;
+    id_ex.sfence_vma       <= id_sfence_vma;
     id_ex.mul_div_req      <= id_mul_div_req;
     id_ex.mul_div_op       <= id_mul_div_op;
     id_ex.atomic_req       <= id_atomic_req;
@@ -818,6 +850,9 @@ assign ex_illegal_mret = (id_ex.retire_action == RETIRE_MRET) &&
                          (current_privilege != PRIVILEGE_M);
 assign ex_illegal_sret = (id_ex.retire_action == RETIRE_SRET) &&
                          ((current_privilege == PRIVILEGE_U) || csr_sret_blocked);
+assign ex_illegal_sfence_vma = id_ex.sfence_vma &&
+                               ((current_privilege == PRIVILEGE_U) ||
+                                ((current_privilege == PRIVILEGE_S) && csr_mstatus_tvm));
 assign ex_system_instruction = {id_ex.csr_addr, id_ex.rs1_addr, id_ex.funct3,
                                 id_ex.rd_addr, OPCODE_SYSTEM};
 
@@ -830,7 +865,8 @@ always_comb begin
   ex_retire_action = id_ex.retire_action;
   ex_trap = id_ex.trap;
 
-  if (ex_illegal_csr_access || ex_illegal_mret || ex_illegal_sret) begin
+  if (ex_illegal_csr_access || ex_illegal_mret || ex_illegal_sret ||
+      ex_illegal_sfence_vma) begin
     ex_retire_action = RETIRE_TRAP;
     ex_trap.mepc = id_ex.pc;
     ex_trap.mcause = {28'h0, TRAP_CAUSE_ILLEGAL_INSTRUCTION};
@@ -879,6 +915,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     ex_mem.csr_addr         <= id_ex.csr_addr;
     ex_mem.csr_wr_data      <= ex_csr_wr_data;
     ex_mem.fence_i          <= id_ex.fence_i;
+    ex_mem.sfence_vma       <= id_ex.sfence_vma;
     ex_mem.retire_action    <= ex_retire_action;
     ex_mem.trap             <= ex_trap;
   end
@@ -1013,6 +1050,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     mem_wb.csr_addr       <= ex_mem.csr_addr;
     mem_wb.csr_wr_data    <= ex_mem.csr_wr_data;
     mem_wb.fence_i        <= ex_mem.fence_i;
+    mem_wb.sfence_vma     <= ex_mem.sfence_vma;
     mem_wb.retire_action  <= ex_mem.retire_action;
     mem_wb.trap           <= ex_mem.trap;
   end

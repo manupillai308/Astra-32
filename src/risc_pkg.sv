@@ -182,7 +182,10 @@ typedef enum logic [3:0] {
     TRAP_CAUSE_STORE_ADDR_MISALIGNED = 4'd6,
     TRAP_CAUSE_ECALL_U               = 4'd8,
     TRAP_CAUSE_ECALL_S               = 4'd9,
-    TRAP_CAUSE_ECALL_M               = 4'd11
+    TRAP_CAUSE_ECALL_M               = 4'd11,
+    TRAP_CAUSE_INST_PAGE_FAULT       = 4'd12,
+    TRAP_CAUSE_LOAD_PAGE_FAULT       = 4'd13,
+    TRAP_CAUSE_STORE_PAGE_FAULT      = 4'd15
 } trap_cause_t;
 
 typedef enum logic [4:0] {
@@ -207,11 +210,12 @@ typedef enum logic [1:0] {
     RETIRE_SRET   = 2'b11
 } retire_action_t;
 
-typedef enum logic [1:0] {
-    RETIRE_BARRIER_NONE              = 2'b00,
-    RETIRE_BARRIER_TRAP_RETURN       = 2'b01,
-    RETIRE_BARRIER_INTERRUPT_RECHECK = 2'b10,
-    RETIRE_BARRIER_FENCE_I           = 2'b11
+typedef enum logic [2:0] {
+    RETIRE_BARRIER_NONE              = 3'b000,
+    RETIRE_BARRIER_TRAP_RETURN       = 3'b001,
+    RETIRE_BARRIER_INTERRUPT_RECHECK = 3'b010,
+    RETIRE_BARRIER_FENCE_I           = 3'b011,
+    RETIRE_BARRIER_SFENCE_VMA        = 3'b100
 } retire_barrier_action_t;
 
 
@@ -233,6 +237,7 @@ typedef struct packed {
     csr_op_t   csr_op;              // RW/RS/RC operation
     logic      csr_imm_select;      // 1 = use zimm, 0 = use rs1 data
     logic      fence_i;             // Instruction-fetch synchronization
+    logic      sfence_vma;          // Address-translation synchronization
     logic      mul_div_req;         // Multi-cycle RV32M operation
     mul_div_op_t mul_div_op;
     logic      atomic_req;          // Multi-transaction RV32A operation
@@ -298,6 +303,7 @@ typedef struct packed {
     csr_op_t     csr_op;
     logic        csr_imm_sel;
     logic        fence_i;
+    logic        sfence_vma;
     logic        mul_div_req;
     mul_div_op_t mul_div_op;
     logic        atomic_req;
@@ -334,6 +340,7 @@ typedef struct packed {
     logic [11:0] csr_addr;
     logic [31:0] csr_wr_data;
     logic        fence_i;
+    logic        sfence_vma;
     retire_action_t retire_action;
     trap_payload_t trap;
 } ex_mem_t;
@@ -349,6 +356,7 @@ typedef struct packed {
     logic [11:0] csr_addr;
     logic [31:0] csr_wr_data;
     logic        fence_i;
+    logic        sfence_vma;
     retire_action_t retire_action;
     trap_payload_t trap;
 } mem_wb_t;

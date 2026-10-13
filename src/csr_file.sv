@@ -29,6 +29,12 @@ module csr_file (
   output logic [31:0] stvec,
   output logic [31:0] mepc,
   output logic [31:0] sepc,
+  output logic [31:0] satp,
+  output logic        mstatus_mprv,
+  output privilege_mode_t mstatus_mpp,
+  output logic        mstatus_sum,
+  output logic        mstatus_mxr,
+  output logic        mstatus_tvm,
   output logic        trap_to_supervisor,
   output logic        sret_blocked,
   output privilege_mode_t current_privilege
@@ -98,6 +104,7 @@ localparam logic [31:0] SSTATUS_MASK =
     (32'h1 << MSTATUS_SIE_BIT) |
     (32'h1 << MSTATUS_SPIE_BIT) |
     (32'h1 << MSTATUS_SPP_BIT) |
+    (32'h1 << MSTATUS_SUM_BIT) |
     (32'h1 << MSTATUS_MXR_BIT);
 localparam logic [31:0] MSTATUS_WRITABLE_MASK =
     SSTATUS_MASK |
@@ -128,7 +135,10 @@ localparam logic [31:0] SUPPORTED_EXCEPTION_DELEG_MASK =
     (32'h1 << TRAP_CAUSE_LOAD_ADDR_MISALIGNED) |
     (32'h1 << TRAP_CAUSE_STORE_ADDR_MISALIGNED) |
     (32'h1 << TRAP_CAUSE_ECALL_U) |
-    (32'h1 << TRAP_CAUSE_ECALL_S);
+    (32'h1 << TRAP_CAUSE_ECALL_S) |
+    (32'h1 << TRAP_CAUSE_INST_PAGE_FAULT) |
+    (32'h1 << TRAP_CAUSE_LOAD_PAGE_FAULT) |
+    (32'h1 << TRAP_CAUSE_STORE_PAGE_FAULT);
 
 logic [31:0] mstatus_q;
 logic [31:0] medeleg_q;
@@ -148,6 +158,7 @@ logic [31:0] sscratch_q;
 logic [31:0] sepc_q;
 logic [31:0] scause_q;
 logic [31:0] stval_q;
+logic [31:0] satp_q;
 logic [31:0] mip_value;
 logic [31:0] sstatus_value;
 logic [31:0] sie_value;
@@ -169,6 +180,12 @@ assign mtvec = mtvec_q;
 assign stvec = stvec_q;
 assign mepc = mepc_q;
 assign sepc = sepc_q;
+assign satp = satp_q;
+assign mstatus_mprv = mstatus_q[MSTATUS_MPRV_BIT];
+assign mstatus_mpp = privilege_mode_t'(mstatus_q[MSTATUS_MPP_MSB:MSTATUS_MPP_LSB]);
+assign mstatus_sum = mstatus_q[MSTATUS_SUM_BIT];
+assign mstatus_mxr = mstatus_q[MSTATUS_MXR_BIT];
+assign mstatus_tvm = mstatus_q[MSTATUS_TVM_BIT];
 assign current_privilege = current_privilege_q;
 assign sret_blocked = (current_privilege_q == PRIVILEGE_S) &&
                       mstatus_q[MSTATUS_TSR_BIT];
@@ -301,7 +318,7 @@ always_comb begin
     CSR_SCAUSE:   rd_data = scause_q;
     CSR_STVAL:    rd_data = stval_q;
     CSR_SIP:      rd_data = sip_value;
-    CSR_SATP:     rd_data = 32'h0;
+    CSR_SATP:     rd_data = satp_q;
     CSR_MSTATUS:  rd_data = mstatus_q;
     CSR_MISA:     rd_data = MISA_VALUE;
     CSR_MEDELEG:  rd_data = medeleg_q;
@@ -340,7 +357,7 @@ always_comb begin
       CSR_SIE:     rd_data = wr_data & mideleg_q & SUPERVISOR_IRQ_MASK;
       CSR_SIP:     rd_data = (sip_value & ~SIP_SW_WRITABLE_MASK) |
                                   (wr_data & SIP_SW_WRITABLE_MASK & mideleg_q);
-      CSR_SATP:    rd_data = 32'h0;
+      CSR_SATP:    rd_data = wr_data;
       CSR_MSTATUS: rd_data = mstatus_write_value;
       CSR_MISA:    rd_data = MISA_VALUE;
       CSR_MCOUNTEREN: rd_data = wr_data & COUNTER_ENABLE_MASK;
@@ -375,6 +392,7 @@ always_ff @(posedge clk or negedge reset_n) begin
     sepc_q <= 32'h0;
     scause_q <= 32'h0;
     stval_q <= 32'h0;
+    satp_q <= 32'h0;
     mip_supervisor_sw_q <= 32'h0;
     current_privilege_q <= PRIVILEGE_M;
   end else begin
@@ -435,8 +453,7 @@ always_ff @(posedge clk or negedge reset_n) begin
         CSR_SIP:      mip_supervisor_sw_q <=
                           (mip_supervisor_sw_q & ~SIP_SW_WRITABLE_MASK) |
                           (wr_data & SIP_SW_WRITABLE_MASK & mideleg_q);
-        CSR_SATP: begin
-        end
+        CSR_SATP:     satp_q <= wr_data;
         CSR_MSTATUS:  mstatus_q <= mstatus_write_value;
         CSR_MISA: begin
         end

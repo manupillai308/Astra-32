@@ -19,6 +19,7 @@ module control (
   input  logic [6:0] opcode,
   input  logic [11:0] csr_addr,
   input  logic [4:0] rs2_addr,
+  input  logic [4:0] rd_addr,
 
   // Outputs
   output logic        pc_sel,
@@ -37,6 +38,7 @@ module control (
   output csr_op_t     csr_op,
   output logic        csr_imm_sel,
   output logic        fence_i,
+  output logic        sfence_vma,
   output logic        mul_div_req,
   output mul_div_op_t mul_div_op,
   output logic        atomic_req,
@@ -474,7 +476,12 @@ always_comb begin
             end
         endcase
     end else if (system_type) begin
-        unique case (csr_addr)
+        if ((funct7 == 7'b0001001) && (rd_addr == 5'h0)) begin
+            ctrl_system = '0;
+            ctrl_system.uses_rs1 = 1'b1;
+            ctrl_system.uses_rs2 = 1'b1;
+            ctrl_system.sfence_vma = 1'b1;
+        end else unique case (csr_addr)
             12'h000: begin
                 ctrl_system.retire_action = RETIRE_TRAP;
                 ctrl_system.trap_cause = TRAP_CAUSE_ECALL_M;
@@ -542,6 +549,7 @@ assign csr_req           = ctrl.csr_req;
 assign csr_op            = ctrl.csr_op;
 assign csr_imm_sel       = ctrl.csr_imm_select;
 assign fence_i           = ctrl.fence_i;
+assign sfence_vma        = ctrl.sfence_vma;
 assign mul_div_req       = ctrl.mul_div_req;
 assign mul_div_op        = ctrl.mul_div_op;
 assign atomic_req        = ctrl.atomic_req;
