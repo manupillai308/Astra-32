@@ -165,6 +165,9 @@ logic        dmem_fire;
 logic        dmem_done_q;
 logic [31:0] dmem_done_rd_data_q;
 logic        normal_dmem_req;
+logic        normal_mem_ready;
+logic        normal_mem_resp_valid;
+logic [31:0] normal_mem_rd_data;
 logic        atomic_unit_req;
 logic        atomic_unit_ready;
 logic        atomic_fire;
@@ -177,7 +180,12 @@ logic        atomic_mem_req;
 logic        atomic_mem_wr_en;
 logic [31:0] atomic_mem_addr;
 logic [31:0] atomic_mem_wr_data;
+logic        atomic_mem_ready;
+logic        atomic_mem_resp_valid;
+logic [31:0] atomic_mem_rd_data;
 logic        atomic_exclusive_active;
+logic        arbiter_write_valid;
+logic [31:0] arbiter_write_addr;
 logic        memory_complete;
 logic        mul_div_unit_req;
 logic        mul_div_unit_ready;
@@ -244,14 +252,14 @@ trap_payload_t csr_trap;
 //   and the regfile write at end of WB lands BEFORE the
 //   next instruction's ID-stage regfile read.
 // --------------------------------------------------------
-assign dmem_fire = normal_dmem_req && dmem_ready;
+assign dmem_fire = normal_dmem_req && normal_mem_ready;
 assign memory_stall = ex_mem.valid &&
                       (ex_mem.retire_action == RETIRE_NORMAL) &&
                       ex_mem.dmem_req &&
                       !memory_complete;
 assign memory_complete = ex_mem.atomic_req ?
                          (atomic_resp_valid || atomic_done_q) :
-                         (dmem_rd_data_valid || dmem_done_q);
+                         (normal_mem_resp_valid || dmem_done_q);
 assign fetch_transaction_stall = imem_pending_q ||
                                  (imem_inflight_q && !imem_rd_data_valid);
 assign fetch_stall = fetch_enable || fetch_transaction_stall;
@@ -954,23 +962,66 @@ atomic_unit u_atomic_unit (
     .mem_wr_en              (atomic_mem_wr_en),
     .mem_addr               (atomic_mem_addr),
     .mem_wr_data            (atomic_mem_wr_data),
-    .mem_ready              (dmem_ready),
-    .mem_resp_valid         (dmem_rd_data_valid),
-    .mem_rd_data            (dmem_rd_data),
+    .mem_ready              (atomic_mem_ready),
+    .mem_resp_valid         (atomic_mem_resp_valid),
+    .mem_rd_data            (atomic_mem_rd_data),
     .clear_reservation      (trap_commit || interrupt_take),
-    .local_write_valid      (dmem_fire && ex_mem.dmem_wr_en),
-    .local_write_addr       (ex_mem.alu_res),
+    .local_write_valid      (arbiter_write_valid),
+    .local_write_addr       (arbiter_write_addr),
     .external_write_valid   (1'b0),
     .external_write_addr    (32'h0),
     .exclusive_active       (atomic_exclusive_active)
 );
 
-assign dmem_req         = ex_mem.atomic_req ? atomic_mem_req : normal_dmem_req;
-assign dmem_wr_en       = ex_mem.atomic_req ? atomic_mem_wr_en : ex_mem.dmem_wr_en;
-assign dmem_data_size   = ex_mem.atomic_req ? WORD : ex_mem.dmem_size;
-assign dmem_addr        = ex_mem.atomic_req ? atomic_mem_addr : ex_mem.alu_res;
-assign dmem_wr_data     = ex_mem.atomic_req ? atomic_mem_wr_data : ex_mem.rs2_data;
-assign dmem_zero_extend = ex_mem.atomic_req ? 1'b0 : ex_mem.dmem_zero_extend;
+memory_arbiter u_memory_arbiter (
+    .clk                (clk),
+    .reset_n            (reset_n),
+
+    .normal_req         (normal_dmem_req),
+    .normal_ready       (normal_mem_ready),
+    .normal_wr_en       (ex_mem.dmem_wr_en),
+    .normal_size        (ex_mem.dmem_size),
+    .normal_addr        (ex_mem.alu_res),
+    .normal_wr_data     (ex_mem.rs2_data),
+    .normal_zero_extend (ex_mem.dmem_zero_extend),
+    .normal_lock        (1'b0),
+    .normal_resp_valid  (normal_mem_resp_valid),
+    .normal_rd_data     (normal_mem_rd_data),
+
+    .atomic_req         (atomic_mem_req),
+    .atomic_ready       (atomic_mem_ready),
+    .atomic_wr_en       (atomic_mem_wr_en),
+    .atomic_size        (WORD),
+    .atomic_addr        (atomic_mem_addr),
+    .atomic_wr_data     (atomic_mem_wr_data),
+    .atomic_zero_extend (1'b0),
+    .atomic_lock        (atomic_exclusive_active),
+    .atomic_resp_valid  (atomic_mem_resp_valid),
+    .atomic_rd_data     (atomic_mem_rd_data),
+
+    .ptw_req            (1'b0),
+    .ptw_ready          (),
+    .ptw_wr_en          (1'b0),
+    .ptw_size           (WORD),
+    .ptw_addr           (32'h0),
+    .ptw_wr_data        (32'h0),
+    .ptw_zero_extend    (1'b0),
+    .ptw_lock           (1'b0),
+    .ptw_resp_valid     (),
+    .ptw_rd_data        (),
+
+    .mem_req            (dmem_req),
+    .mem_ready          (dmem_ready),
+    .mem_wr_en          (dmem_wr_en),
+    .mem_size           (dmem_data_size),
+    .mem_addr           (dmem_addr),
+    .mem_wr_data        (dmem_wr_data),
+    .mem_zero_extend    (dmem_zero_extend),
+    .mem_resp_valid     (dmem_rd_data_valid),
+    .mem_rd_data        (dmem_rd_data),
+    .write_valid        (arbiter_write_valid),
+    .write_addr         (arbiter_write_addr)
+);
 
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) begin
@@ -978,15 +1029,15 @@ always_ff @(posedge clk or negedge reset_n) begin
     dmem_done_q <= 1'b0;
     dmem_done_rd_data_q <= 32'h0;
   end else if (!ex_mem.atomic_req) begin
-    if (dmem_fire && !dmem_rd_data_valid) begin
+    if (dmem_fire && !normal_mem_resp_valid) begin
       dmem_inflight <= 1'b1;
-    end else if (dmem_rd_data_valid) begin
+    end else if (normal_mem_resp_valid) begin
       dmem_inflight <= 1'b0;
     end
 
-    if (dmem_rd_data_valid && (fetch_stall || execute_stall)) begin
+    if (normal_mem_resp_valid && (fetch_stall || execute_stall)) begin
       dmem_done_q <= 1'b1;
-      dmem_done_rd_data_q <= dmem_rd_data;
+      dmem_done_rd_data_q <= normal_mem_rd_data;
     end else if (!memory_stall && !fetch_stall && !execute_stall) begin
       dmem_done_q <= 1'b0;
     end
@@ -1015,7 +1066,7 @@ end
 
 // --------------------------------------------------------
 // MEM / WB  register
-//   dmem_rd_data is provided by the SoC memory system in the WB cycle.
+//   Load data is routed back from the memory arbiter's normal client.
 // --------------------------------------------------------
 
 // --------------------------------------------------------
@@ -1026,7 +1077,7 @@ always_comb begin
   if (ex_mem.atomic_req)
     wb_data = atomic_done_q ? atomic_done_result_q : atomic_result;
   else if (ex_mem.load_from_memory)
-    wb_data = dmem_done_q ? dmem_done_rd_data_q : dmem_rd_data;
+    wb_data = dmem_done_q ? dmem_done_rd_data_q : normal_mem_rd_data;
   else
     wb_data = ex_mem.forward_data;
 end
