@@ -48,11 +48,17 @@ typedef enum logic [3:0] {
 // Memory Access Sizes
 // --------------------------------------------------------
 
-typedef enum logic [1:0] { 
+typedef enum logic [1:0] {
   BYTE = 2'b00,
   HALF_WORD = 2'b01,
   WORD = 2'b11
  } mem_size_t;
+
+typedef enum logic [1:0] {
+  VM_ACCESS_INSTRUCTION,
+  VM_ACCESS_LOAD,
+  VM_ACCESS_STORE
+} vm_access_t;
 
 
 
@@ -318,6 +324,7 @@ typedef struct packed {
 // EX/MEM: ALU result + resolved branch + remaining MEM/WB controls
 typedef struct packed {
     logic        valid;
+    logic [31:0] pc;                // PC used for precise MEM-stage faults
     logic [31:0] alu_res;
     logic [31:0] rs2_data;          // for stores
     logic [31:0] branch_target;     // {alu_res[31:1], 1'b0}

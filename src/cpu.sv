@@ -164,28 +164,16 @@ logic        dmem_inflight;
 logic        dmem_fire;
 logic        dmem_done_q;
 logic [31:0] dmem_done_rd_data_q;
-logic        normal_dmem_req;
-logic        normal_mem_ready;
-logic        normal_mem_resp_valid;
-logic [31:0] normal_mem_rd_data;
-logic        atomic_unit_req;
-logic        atomic_unit_ready;
-logic        atomic_fire;
-logic        atomic_inflight_q;
-logic        atomic_resp_valid;
-logic        atomic_done_q;
-logic [31:0] atomic_result;
-logic [31:0] atomic_done_result_q;
-logic        atomic_mem_req;
-logic        atomic_mem_wr_en;
-logic [31:0] atomic_mem_addr;
-logic [31:0] atomic_mem_wr_data;
-logic        atomic_mem_ready;
-logic        atomic_mem_resp_valid;
-logic [31:0] atomic_mem_rd_data;
-logic        atomic_exclusive_active;
-logic        arbiter_write_valid;
-logic [31:0] arbiter_write_addr;
+logic        dmem_done_page_fault_q;
+logic [31:0] dmem_done_fault_addr_q;
+logic        data_mmu_req;
+logic        data_mmu_ready;
+logic        data_mmu_resp_valid;
+logic [31:0] data_mmu_rd_data;
+logic        data_mmu_page_fault;
+logic [31:0] data_mmu_fault_addr;
+logic        dmem_response_page_fault;
+logic [31:0] dmem_response_fault_addr;
 logic        memory_complete;
 logic        mul_div_unit_req;
 logic        mul_div_unit_ready;
@@ -252,14 +240,16 @@ trap_payload_t csr_trap;
 //   and the regfile write at end of WB lands BEFORE the
 //   next instruction's ID-stage regfile read.
 // --------------------------------------------------------
-assign dmem_fire = normal_dmem_req && normal_mem_ready;
+assign dmem_fire = data_mmu_req && data_mmu_ready;
 assign memory_stall = ex_mem.valid &&
                       (ex_mem.retire_action == RETIRE_NORMAL) &&
                       ex_mem.dmem_req &&
                       !memory_complete;
-assign memory_complete = ex_mem.atomic_req ?
-                         (atomic_resp_valid || atomic_done_q) :
-                         (normal_mem_resp_valid || dmem_done_q);
+assign memory_complete = data_mmu_resp_valid || dmem_done_q;
+assign dmem_response_page_fault = dmem_done_q ? dmem_done_page_fault_q :
+                                  (data_mmu_resp_valid && data_mmu_page_fault);
+assign dmem_response_fault_addr = dmem_done_q ? dmem_done_fault_addr_q :
+                                                 data_mmu_fault_addr;
 assign fetch_transaction_stall = imem_pending_q ||
                                  (imem_inflight_q && !imem_rd_data_valid);
 assign fetch_stall = fetch_enable || fetch_transaction_stall;
@@ -321,6 +311,7 @@ assign sret_redirect = sret_commit && !retire_barrier_active;
 assign interrupt_request = irq_valid &&
                            (!retire_barrier_active ||
                             (retire_barrier_state_q == RETIRE_BARRIER_RECHECK)) &&
+                           !dmem_response_page_fault &&
                            !trap_commit &&
                            !mret_commit &&
                            !sret_commit &&
@@ -345,7 +336,8 @@ assign redirect_target = trap_redirect ? trap_vector :
                          retire_barrier_resume_redirect ? retire_barrier_resume_pc_q :
                          ex_mem.branch_target;
 assign retire_squash_request = ex_mem.valid &&
-                               ((ex_mem.retire_action == RETIRE_TRAP) ||
+                               (dmem_response_page_fault ||
+                                (ex_mem.retire_action == RETIRE_TRAP) ||
                                 (ex_mem.retire_action == RETIRE_MRET) ||
                                 (ex_mem.retire_action == RETIRE_SRET));
 assign retire_squash = retire_squash_request && !memory_stall && !fetch_transaction_stall;
@@ -904,6 +896,7 @@ always_ff @(posedge clk or negedge reset_n) begin
   else if (retire_squash) ex_mem <= '0;
   else begin
     ex_mem.valid            <= id_ex.valid && !redirect_fire;
+    ex_mem.pc               <= id_ex.pc;
     ex_mem.alu_res          <= ex_alu_res;
     ex_mem.rs2_data         <= rs2_data_resolved;
     ex_mem.branch_target    <= ex_branch_target;
@@ -930,97 +923,48 @@ always_ff @(posedge clk or negedge reset_n) begin
 end
 
 // --------------------------------------------------------
-// MEM stage bus
-//   Side effects are gated with ex_mem.valid so bubbles do not issue
-//   platform memory or MMIO transactions.
+// MEM stage data MMU
+//   The pipeline supplies a virtual operation. The MMU translates it,
+//   executes normal or atomic physical transactions, and returns one result.
 // --------------------------------------------------------
-assign normal_dmem_req = ex_mem.valid &&
-                         (ex_mem.retire_action == RETIRE_NORMAL) &&
-                         ex_mem.dmem_req &&
-                         !ex_mem.atomic_req &&
-                         !dmem_inflight &&
-                         !dmem_done_q;
+assign data_mmu_req = ex_mem.valid &&
+                      (ex_mem.retire_action == RETIRE_NORMAL) &&
+                      ex_mem.dmem_req &&
+                      !dmem_inflight &&
+                      !dmem_done_q;
 
-assign atomic_unit_req = ex_mem.valid &&
-                         (ex_mem.retire_action == RETIRE_NORMAL) &&
-                         ex_mem.atomic_req &&
-                         !atomic_inflight_q &&
-                         !atomic_done_q;
-assign atomic_fire = atomic_unit_req && atomic_unit_ready;
-
-atomic_unit u_atomic_unit (
-    .clk                    (clk),
-    .reset_n                (reset_n),
-    .req                    (atomic_unit_req),
-    .ready                  (atomic_unit_ready),
-    .op                     (ex_mem.atomic_op),
-    .addr                   (ex_mem.alu_res),
-    .operand                (ex_mem.rs2_data),
-    .resp_valid             (atomic_resp_valid),
-    .result                 (atomic_result),
-    .mem_req                (atomic_mem_req),
-    .mem_wr_en              (atomic_mem_wr_en),
-    .mem_addr               (atomic_mem_addr),
-    .mem_wr_data            (atomic_mem_wr_data),
-    .mem_ready              (atomic_mem_ready),
-    .mem_resp_valid         (atomic_mem_resp_valid),
-    .mem_rd_data            (atomic_mem_rd_data),
-    .clear_reservation      (trap_commit || interrupt_take),
-    .local_write_valid      (arbiter_write_valid),
-    .local_write_addr       (arbiter_write_addr),
-    .external_write_valid   (1'b0),
-    .external_write_addr    (32'h0),
-    .exclusive_active       (atomic_exclusive_active)
-);
-
-memory_arbiter u_memory_arbiter (
-    .clk                (clk),
-    .reset_n            (reset_n),
-
-    .normal_req         (normal_dmem_req),
-    .normal_ready       (normal_mem_ready),
-    .normal_wr_en       (ex_mem.dmem_wr_en),
-    .normal_size        (ex_mem.dmem_size),
-    .normal_addr        (ex_mem.alu_res),
-    .normal_wr_data     (ex_mem.rs2_data),
-    .normal_zero_extend (ex_mem.dmem_zero_extend),
-    .normal_lock        (1'b0),
-    .normal_resp_valid  (normal_mem_resp_valid),
-    .normal_rd_data     (normal_mem_rd_data),
-
-    .atomic_req         (atomic_mem_req),
-    .atomic_ready       (atomic_mem_ready),
-    .atomic_wr_en       (atomic_mem_wr_en),
-    .atomic_size        (WORD),
-    .atomic_addr        (atomic_mem_addr),
-    .atomic_wr_data     (atomic_mem_wr_data),
-    .atomic_zero_extend (1'b0),
-    .atomic_lock        (atomic_exclusive_active),
-    .atomic_resp_valid  (atomic_mem_resp_valid),
-    .atomic_rd_data     (atomic_mem_rd_data),
-
-    .ptw_req            (1'b0),
-    .ptw_ready          (),
-    .ptw_wr_en          (1'b0),
-    .ptw_size           (WORD),
-    .ptw_addr           (32'h0),
-    .ptw_wr_data        (32'h0),
-    .ptw_zero_extend    (1'b0),
-    .ptw_lock           (1'b0),
-    .ptw_resp_valid     (),
-    .ptw_rd_data        (),
-
-    .mem_req            (dmem_req),
-    .mem_ready          (dmem_ready),
-    .mem_wr_en          (dmem_wr_en),
-    .mem_size           (dmem_data_size),
-    .mem_addr           (dmem_addr),
-    .mem_wr_data        (dmem_wr_data),
-    .mem_zero_extend    (dmem_zero_extend),
-    .mem_resp_valid     (dmem_rd_data_valid),
-    .mem_rd_data        (dmem_rd_data),
-    .write_valid        (arbiter_write_valid),
-    .write_addr         (arbiter_write_addr)
+data_mmu u_data_mmu (
+    .clk                 (clk),
+    .reset_n             (reset_n),
+    .req                 (data_mmu_req),
+    .ready               (data_mmu_ready),
+    .wr_en               (ex_mem.dmem_wr_en),
+    .size                (ex_mem.dmem_size),
+    .virtual_addr        (ex_mem.alu_res),
+    .wr_data             (ex_mem.rs2_data),
+    .zero_extend         (ex_mem.dmem_zero_extend),
+    .atomic_req          (ex_mem.atomic_req),
+    .atomic_op           (ex_mem.atomic_op),
+    .current_privilege   (current_privilege),
+    .mstatus_mprv        (csr_mstatus_mprv),
+    .mstatus_mpp         (csr_mstatus_mpp),
+    .mstatus_sum         (csr_mstatus_sum),
+    .mstatus_mxr         (csr_mstatus_mxr),
+    .satp                (csr_satp),
+    .clear_reservation   (trap_commit || interrupt_take),
+    .resp_valid          (data_mmu_resp_valid),
+    .rd_data             (data_mmu_rd_data),
+    .page_fault          (data_mmu_page_fault),
+    .fault_addr          (data_mmu_fault_addr),
+    .mem_req             (dmem_req),
+    .mem_ready           (dmem_ready),
+    .mem_wr_en           (dmem_wr_en),
+    .mem_size            (dmem_data_size),
+    .mem_addr            (dmem_addr),
+    .mem_wr_data         (dmem_wr_data),
+    .mem_zero_extend     (dmem_zero_extend),
+    .mem_resp_valid      (dmem_rd_data_valid),
+    .mem_rd_data         (dmem_rd_data)
 );
 
 always_ff @(posedge clk or negedge reset_n) begin
@@ -1028,45 +972,30 @@ always_ff @(posedge clk or negedge reset_n) begin
     dmem_inflight <= 1'b0;
     dmem_done_q <= 1'b0;
     dmem_done_rd_data_q <= 32'h0;
-  end else if (!ex_mem.atomic_req) begin
-    if (dmem_fire && !normal_mem_resp_valid) begin
+    dmem_done_page_fault_q <= 1'b0;
+    dmem_done_fault_addr_q <= 32'h0;
+  end else begin
+    if (dmem_fire && !data_mmu_resp_valid) begin
       dmem_inflight <= 1'b1;
-    end else if (normal_mem_resp_valid) begin
+    end else if (data_mmu_resp_valid) begin
       dmem_inflight <= 1'b0;
     end
 
-    if (normal_mem_resp_valid && (fetch_stall || execute_stall)) begin
+    if (data_mmu_resp_valid && (fetch_stall || execute_stall)) begin
       dmem_done_q <= 1'b1;
-      dmem_done_rd_data_q <= normal_mem_rd_data;
+      dmem_done_rd_data_q <= data_mmu_rd_data;
+      dmem_done_page_fault_q <= data_mmu_page_fault;
+      dmem_done_fault_addr_q <= data_mmu_fault_addr;
     end else if (!memory_stall && !fetch_stall && !execute_stall) begin
       dmem_done_q <= 1'b0;
-    end
-  end
-end
-
-always_ff @(posedge clk or negedge reset_n) begin
-  if (!reset_n) begin
-    atomic_inflight_q <= 1'b0;
-    atomic_done_q <= 1'b0;
-    atomic_done_result_q <= 32'h0;
-  end else begin
-    if (atomic_fire) begin
-      atomic_inflight_q <= 1'b1;
-    end
-
-    if (atomic_resp_valid) begin
-      atomic_inflight_q <= 1'b0;
-      atomic_done_result_q <= atomic_result;
-      atomic_done_q <= fetch_stall || execute_stall;
-    end else if (atomic_done_q && !memory_stall && !fetch_stall && !execute_stall) begin
-      atomic_done_q <= 1'b0;
+      dmem_done_page_fault_q <= 1'b0;
     end
   end
 end
 
 // --------------------------------------------------------
 // MEM / WB  register
-//   Load data is routed back from the memory arbiter's normal client.
+//   Data and faults are returned by the data MMU.
 // --------------------------------------------------------
 
 // --------------------------------------------------------
@@ -1074,10 +1003,8 @@ end
 // register_file at posedge, gated by (mem_wb.valid & rf_wr_en).
 // --------------------------------------------------------
 always_comb begin
-  if (ex_mem.atomic_req)
-    wb_data = atomic_done_q ? atomic_done_result_q : atomic_result;
-  else if (ex_mem.load_from_memory)
-    wb_data = dmem_done_q ? dmem_done_rd_data_q : normal_mem_rd_data;
+  if (ex_mem.atomic_req || ex_mem.load_from_memory)
+    wb_data = dmem_done_q ? dmem_done_rd_data_q : data_mmu_rd_data;
   else
     wb_data = ex_mem.forward_data;
 end
@@ -1094,16 +1021,26 @@ always_ff @(posedge clk or negedge reset_n) begin
   else begin
     mem_wb.valid          <= ex_mem.valid;
     mem_wb.rd_addr        <= ex_mem.rd_addr;
-    mem_wb.rf_wr_en       <= ex_mem.rf_wr_en;
+    mem_wb.rf_wr_en       <= dmem_response_page_fault ? 1'b0 : ex_mem.rf_wr_en;
     mem_wb_committed      <= 1'b0;
     mem_wb.wb_data        <= wb_data;
-    mem_wb.csr_wr_en      <= ex_mem.csr_wr_en;
+    mem_wb.csr_wr_en      <= dmem_response_page_fault ? 1'b0 : ex_mem.csr_wr_en;
     mem_wb.csr_addr       <= ex_mem.csr_addr;
     mem_wb.csr_wr_data    <= ex_mem.csr_wr_data;
-    mem_wb.fence_i        <= ex_mem.fence_i;
-    mem_wb.sfence_vma     <= ex_mem.sfence_vma;
-    mem_wb.retire_action  <= ex_mem.retire_action;
-    mem_wb.trap           <= ex_mem.trap;
+    mem_wb.fence_i        <= dmem_response_page_fault ? 1'b0 : ex_mem.fence_i;
+    mem_wb.sfence_vma     <= dmem_response_page_fault ? 1'b0 : ex_mem.sfence_vma;
+    mem_wb.retire_action  <= dmem_response_page_fault ? RETIRE_TRAP :
+                                                        ex_mem.retire_action;
+    if (dmem_response_page_fault) begin
+      mem_wb.trap.mepc <= ex_mem.pc;
+      mem_wb.trap.mcause <= {28'h0,
+          ((ex_mem.atomic_req && (ex_mem.atomic_op == ATOMIC_LR)) ||
+           (!ex_mem.atomic_req && ex_mem.load_from_memory)) ?
+          TRAP_CAUSE_LOAD_PAGE_FAULT : TRAP_CAUSE_STORE_PAGE_FAULT};
+      mem_wb.trap.mtval <= dmem_response_fault_addr;
+    end else begin
+      mem_wb.trap <= ex_mem.trap;
+    end
   end
 end
 
