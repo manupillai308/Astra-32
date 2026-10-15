@@ -11,7 +11,8 @@ module test_bench_data_memory();
   localparam int LED_WIDTH = 3;
   localparam logic [LED_WIDTH-1:0] TEST_PASS_LED = 3'h1;
   localparam logic [LED_WIDTH-1:0] TEST_FAIL_LED = 3'h2;
-  localparam int RAM_ADDR_WIDTH = 12;
+  // Sv32 tests need separate 4 KiB root and level-0 page tables.
+  localparam int RAM_ADDR_WIDTH = 14;
   localparam int CLK_HZ = 100_000_000;
   localparam int UART_BAUD = 115_200;
   localparam int UART_CLKS_PER_BIT = CLK_HZ / UART_BAUD;
