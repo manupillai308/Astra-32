@@ -105,9 +105,7 @@ endfunction
 assign lock_enforced = lock_active_q && owner_lock(lock_owner_q);
 assign selected_lock = owner_lock(selected_owner);
 assign mem_fire = mem_req && mem_ready;
-assign response_expected = (state_q == ARB_WAIT) ||
-                           (((state_q == ARB_IDLE) || (state_q == ARB_ISSUE)) &&
-                            mem_fire);
+assign response_expected = (state_q == ARB_WAIT);
 
 always_comb begin
   selected_owner = OWNER_NORMAL;
@@ -230,26 +228,33 @@ always_comb begin
   end
 end
 
-always_comb begin
-  normal_resp_valid = 1'b0;
-  atomic_resp_valid = 1'b0;
-  ptw_resp_valid = 1'b0;
-  normal_rd_data = mem_rd_data;
-  atomic_rd_data = mem_rd_data;
-  ptw_rd_data = mem_rd_data;
+always_ff @(posedge clk or negedge reset_n) begin
+  if (!reset_n) begin
+    normal_resp_valid <= 1'b0;
+    atomic_resp_valid <= 1'b0;
+    ptw_resp_valid <= 1'b0;
+    normal_rd_data <= 32'h0;
+    atomic_rd_data <= 32'h0;
+    ptw_rd_data <= 32'h0;
+  end else begin
+    normal_resp_valid <= 1'b0;
+    atomic_resp_valid <= 1'b0;
+    ptw_resp_valid <= 1'b0;
 
-  if (mem_resp_valid && response_expected) begin
-    if (state_q == ARB_IDLE) begin
-      unique case (selected_owner)
-        OWNER_NORMAL: normal_resp_valid = 1'b1;
-        OWNER_ATOMIC: atomic_resp_valid = 1'b1;
-        default: ptw_resp_valid = 1'b1;
-      endcase
-    end else begin
+    if (mem_resp_valid && response_expected) begin
       unique case (owner_q)
-        OWNER_NORMAL: normal_resp_valid = 1'b1;
-        OWNER_ATOMIC: atomic_resp_valid = 1'b1;
-        default: ptw_resp_valid = 1'b1;
+        OWNER_NORMAL: begin
+          normal_resp_valid <= 1'b1;
+          normal_rd_data <= mem_rd_data;
+        end
+        OWNER_ATOMIC: begin
+          atomic_resp_valid <= 1'b1;
+          atomic_rd_data <= mem_rd_data;
+        end
+        default: begin
+          ptw_resp_valid <= 1'b1;
+          ptw_rd_data <= mem_rd_data;
+        end
       endcase
     end
   end
@@ -281,9 +286,7 @@ always_ff @(posedge clk or negedge reset_n) begin
 
           if (mem_fire) begin
             next_priority_q <= next_owner(selected_owner);
-            if (!mem_resp_valid) begin
-              state_q <= ARB_WAIT;
-            end
+            state_q <= ARB_WAIT;
           end else begin
             state_q <= ARB_ISSUE;
           end
@@ -292,7 +295,7 @@ always_ff @(posedge clk or negedge reset_n) begin
       ARB_ISSUE: begin
         if (mem_fire) begin
           next_priority_q <= next_owner(owner_q);
-          state_q <= mem_resp_valid ? ARB_IDLE : ARB_WAIT;
+          state_q <= ARB_WAIT;
         end
       end
       ARB_WAIT: begin
