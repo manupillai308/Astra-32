@@ -5,6 +5,10 @@ _start:
     lui     x22, 0x80002
     lui     x30, 0x10000
 
+    # Identity-map ROM as supervisor RX so S-mode can keep executing.
+    addi    x1, x0, 0x4b
+    sw      x1, 0(x20)
+
     # Supervisor RWAD mapping for translated data accesses.
     lui     x1, 0x20000
     ori     x1, x1, 0x0c7

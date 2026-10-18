@@ -4,6 +4,13 @@ _start:
     lui     x20, 0x80000
     lui     x30, 0x10000
 
+    # VA 0 maps ROM as user RX. VA 0x0040_0000 is a supervisor RX alias
+    # used by the delegated trap handler.
+    addi    x1, x0, 0x5b
+    sw      x1, 0(x20)
+    addi    x1, x0, 0x4b
+    sw      x1, 4(x20)
+
     # Leave the target VA unmapped. Map LED MMIO for the S-mode handler.
     sw      x0, 0x400(x20)
     lui     x1, 0x04000
@@ -15,6 +22,8 @@ _start:
     csrw    mtvec, x1
     lui     x1, %hi(supervisor_handler)
     addi    x1, x1, %lo(supervisor_handler)
+    lui     x2, 0x400
+    add     x1, x1, x2
     csrw    stvec, x1
 
     # Delegate load page faults to S-mode.

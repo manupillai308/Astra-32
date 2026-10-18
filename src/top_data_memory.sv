@@ -10,7 +10,9 @@ module top_data_memory #(
   parameter UART_BASE_ADDR = 32'h1000_0010,
   parameter int CLK_HZ = 12_000_000,
   parameter int UART_BAUD = 115_200,
-  parameter int RAM_STALL_CYCLES = 2
+  parameter int RAM_STALL_CYCLES = 2,
+  parameter int ITLB_ENTRY_COUNT = 16,
+  parameter int DTLB_ENTRY_COUNT = 16
 )(
   input  logic                 clk,
   input  logic                 reset_n,
@@ -46,7 +48,9 @@ always_comb begin
 end
 
 cpu #(
-  .RESET_PC(RESET_PC)
+  .RESET_PC        (RESET_PC),
+  .ITLB_ENTRY_COUNT(ITLB_ENTRY_COUNT),
+  .DTLB_ENTRY_COUNT(DTLB_ENTRY_COUNT)
 ) u_cpu (
   .clk              (clk),
   .reset_n          (reset_n),

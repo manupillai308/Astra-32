@@ -14,8 +14,8 @@ module sv32_page_table_walker (
   input logic mxr,
 
   output logic resp_valid,
-  output logic [31:0] physical_addr,
   output logic page_fault,
+  output tlb_fill_t fill,
 
   output logic mem_req,
   input logic mem_ready,
@@ -48,8 +48,8 @@ logic sum_q;
 logic mxr_q;
 logic [31:0] pte_addr_q;
 logic [31:0] updated_pte_q;
-logic [31:0] physical_addr_q;
 logic page_fault_q;
+tlb_fill_t fill_q;
 
 logic current_level_1;
 logic pte_read;
@@ -67,8 +67,8 @@ logic [31:0] translated_addr;
 
 assign ready = (state_q == PTW_IDLE);
 assign resp_valid = (state_q == PTW_RESP);
-assign physical_addr = physical_addr_q;
 assign page_fault = page_fault_q;
+assign fill = fill_q;
 
 assign mem_req = (state_q == PTW_LEVEL_1_REQ) ||
                  (state_q == PTW_LEVEL_0_REQ) ||
@@ -130,8 +130,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     mxr_q <= 1'b0;
     pte_addr_q <= 32'h0;
     updated_pte_q <= 32'h0;
-    physical_addr_q <= 32'h0;
     page_fault_q <= 1'b0;
+    fill_q <= '0;
   end else begin
     unique case (state_q)
       PTW_IDLE: begin
@@ -141,8 +141,8 @@ always_ff @(posedge clk or negedge reset_n) begin
           privilege_q <= privilege;
           sum_q <= sum;
           mxr_q <= mxr;
-          physical_addr_q <= 32'h0;
           page_fault_q <= 1'b0;
+          fill_q <= '0;
 
           if (root_ppn[21:20] != 2'b00) begin
             page_fault_q <= 1'b1;
@@ -183,7 +183,16 @@ always_ff @(posedge clk or negedge reset_n) begin
             page_fault_q <= 1'b1;
             state_q <= PTW_RESP;
           end else begin
-            physical_addr_q <= translated_addr;
+            fill_q.physical_addr <= translated_addr;
+            fill_q.ppn <= mem_rd_data[29:10];
+            fill_q.superpage <= current_level_1;
+            fill_q.read <= mem_rd_data[1];
+            fill_q.write <= mem_rd_data[2];
+            fill_q.execute <= mem_rd_data[3];
+            fill_q.user <= mem_rd_data[4];
+            fill_q.accessed <= 1'b1;
+            fill_q.dirty <= mem_rd_data[7] ||
+                            (access_type_q == VM_ACCESS_STORE);
             if (pte_ad_update_required) begin
               updated_pte_q <= mem_rd_data | 32'h0000_0040 |
                                ((access_type_q == VM_ACCESS_STORE) ?

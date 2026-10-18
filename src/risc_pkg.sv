@@ -60,6 +60,18 @@ typedef enum logic [1:0] {
   VM_ACCESS_STORE
 } vm_access_t;
 
+typedef struct packed {
+  logic [31:0] physical_addr;
+  logic [19:0] ppn;
+  logic        superpage;
+  logic        read;
+  logic        write;
+  logic        execute;
+  logic        user;
+  logic        accessed;
+  logic        dirty;
+} tlb_fill_t;
+
 
 
 

@@ -7,6 +7,10 @@ _start:
     lui     x22, 0x80002
     lui     x30, 0x10000
 
+    # Identity-map ROM as supervisor RX so S-mode can keep executing.
+    addi    x1, x0, 0x4b
+    sw      x1, 0(x20)
+
     # root[0x100] -> level-0 table at 0x8000_1000.
     lui     x1, 0x80001
     srli    x1, x1, 2

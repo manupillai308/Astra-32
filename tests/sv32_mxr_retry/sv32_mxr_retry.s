@@ -5,6 +5,10 @@ _start:
     lui     x22, 0x80002
     lui     x30, 0x10000
 
+    # Identity-map ROM as supervisor RX for the test and trap handler.
+    addi    x1, x0, 0x4b
+    sw      x1, 0(x20)
+
     # Execute-only supervisor superpage. A load requires MXR=1.
     lui     x1, 0x20000
     ori     x1, x1, 0x049       # V | X | A

@@ -8,6 +8,10 @@ _start:
     lui     x22, 0x80002
     lui     x30, 0x10000
 
+    # Identity-map ROM as supervisor RX so S-mode can keep executing.
+    addi    x1, x0, 0x4b
+    sw      x1, 0(x20)
+
     # VA 0x4000_0000 -> PA 0x8000_0000 as a 4 MiB RW superpage.
     # Leave A/D clear so the walker must set both before the store.
     lui     x1, 0x20000

@@ -5,6 +5,13 @@ _start:
     lui     x22, 0x80002
     lui     x30, 0x10000
 
+    # VA 0 maps ROM as user RX. VA 0x0040_0000 is a supervisor RX alias
+    # used by the delegated ecall handler.
+    addi    x1, x0, 0x5b
+    sw      x1, 0(x20)
+    addi    x1, x0, 0x4b
+    sw      x1, 4(x20)
+
     # User RWAD mapping for data and supervisor mapping for LED reporting.
     lui     x1, 0x20000
     ori     x1, x1, 0x0d7       # V | R | W | U | A | D
@@ -18,6 +25,8 @@ _start:
 
     lui     x1, %hi(supervisor_handler)
     addi    x1, x1, %lo(supervisor_handler)
+    lui     x5, 0x400
+    add     x1, x1, x5
     csrw    stvec, x1
     addi    x1, x0, 0x100       # Delegate U-mode ecall, cause 8.
     csrw    medeleg, x1

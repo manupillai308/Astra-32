@@ -19,7 +19,9 @@
 import risc_pkg::*;
 
 module cpu #(
-  parameter RESET_PC = 32'h0000
+  parameter RESET_PC = 32'h0000,
+  parameter int ITLB_ENTRY_COUNT = 16,
+  parameter int DTLB_ENTRY_COUNT = 16
 )(
   input logic clk,
   input logic reset_n,
@@ -51,12 +53,20 @@ logic        fetch_enable;
 logic        fetch_stall;
 logic        fetch_transaction_stall;
 logic        imem_fire;
+logic        instruction_mmu_req;
+logic        instruction_mmu_ready;
+logic        instruction_mmu_resp_valid;
+logic [31:0] instruction_mmu_rd_data;
+logic        instruction_mmu_page_fault;
+logic [31:0] instruction_mmu_fault_addr;
 logic        imem_pending_q;
 logic        imem_inflight_q;
 logic        imem_done_q;
 logic [31:0] imem_req_pc_q;
 logic [31:0] imem_done_pc_q;
 logic [31:0] imem_done_data_q;
+logic        imem_done_page_fault_q;
+logic [31:0] imem_done_fault_addr_q;
 logic        load_use_stall;
 logic        memory_stall;
 logic        execute_stall;
@@ -97,6 +107,8 @@ logic                   sfence_vma_flush;
 logic        if_id_valid;
 logic [31:0] if_id_pc;
 logic [31:0] if_id_instruction;
+logic        if_id_page_fault;
+logic [31:0] if_id_fault_addr;
 
 // =====================================================
 // Pipeline registers
@@ -251,7 +263,7 @@ assign dmem_response_page_fault = dmem_done_q ? dmem_done_page_fault_q :
 assign dmem_response_fault_addr = dmem_done_q ? dmem_done_fault_addr_q :
                                                  data_mmu_fault_addr;
 assign fetch_transaction_stall = imem_pending_q ||
-                                 (imem_inflight_q && !imem_rd_data_valid);
+                                 (imem_inflight_q && !instruction_mmu_resp_valid);
 assign fetch_stall = fetch_enable || fetch_transaction_stall;
 assign execute_complete = mul_div_resp_valid || mul_div_done_q;
 assign execute_stall = id_ex.valid && id_ex.mul_div_req && !execute_complete;
@@ -261,7 +273,7 @@ assign fetch_enable = !interrupt_request && !retire_squash_request && !branch_re
                       !retire_barrier_active &&
                       (ex_retire_barrier_action == RETIRE_BARRIER_NONE) &&
                       !imem_pending_q && !imem_inflight_q && !imem_done_q;
-assign imem_fire = imem_req && imem_ready;
+assign imem_fire = instruction_mmu_req && instruction_mmu_ready;
 
 always_comb begin
   ex_retire_barrier_action = RETIRE_BARRIER_NONE;
@@ -370,7 +382,7 @@ end
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n)                 pc <= RESET_PC;
   else if (redirect_fire)       pc <= redirect_target;
-  else if (!retire_barrier_active && !retire_barrier_start && imem_rd_data_valid)
+  else if (!retire_barrier_active && !retire_barrier_start && instruction_mmu_resp_valid)
                                   pc <= imem_req_pc_q + 32'd4;
 end
 
@@ -427,8 +439,7 @@ end
 //   across the cycles where the pipe is busy. pc_pipe carries
 //   the pc of the instruction whose word is arriving next cycle.
 // --------------------------------------------------------
-assign imem_req  = imem_pending_q;
-assign imem_addr = imem_req_pc_q;
+assign instruction_mmu_req = imem_pending_q;
 
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) begin
@@ -438,6 +449,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     imem_req_pc_q <= RESET_PC;
     imem_done_pc_q <= RESET_PC;
     imem_done_data_q <= 32'h0;
+    imem_done_page_fault_q <= 1'b0;
+    imem_done_fault_addr_q <= 32'h0;
   end else if (redirect_fire) begin
     imem_pending_q <= 1'b0;
     imem_inflight_q <= 1'b0;
@@ -462,17 +475,20 @@ always_ff @(posedge clk or negedge reset_n) begin
       imem_inflight_q <= 1'b1;
     end
 
-    if (imem_rd_data_valid) begin
+    if (instruction_mmu_resp_valid) begin
       imem_inflight_q <= 1'b0;
     end
 
-    if (imem_rd_data_valid && (load_use_stall || memory_stall || execute_stall)) begin
+    if (instruction_mmu_resp_valid && (load_use_stall || memory_stall || execute_stall)) begin
       imem_done_q <= 1'b1;
       imem_done_pc_q <= imem_req_pc_q;
-      imem_done_data_q <= imem_data;
+      imem_done_data_q <= instruction_mmu_rd_data;
+      imem_done_page_fault_q <= instruction_mmu_page_fault;
+      imem_done_fault_addr_q <= instruction_mmu_fault_addr;
     end else if (imem_done_q && !load_use_stall && !memory_stall &&
                  !fetch_stall && !execute_stall) begin
       imem_done_q <= 1'b0;
+      imem_done_page_fault_q <= 1'b0;
     end
   end
 end
@@ -482,19 +498,25 @@ always_ff @(posedge clk or negedge reset_n) begin
     if_id_valid <= 1'b0;
     if_id_pc    <= RESET_PC;
     if_id_instruction <= 32'h0;
+    if_id_page_fault <= 1'b0;
+    if_id_fault_addr <= 32'h0;
   end else if (redirect_fire || retire_squash ||
                retire_barrier_start || retire_barrier_active) begin
     // Defensive: squash any speculative fetch behind redirect/trap.
     // CONTROL HAZARD: IF/ID flush
     if_id_valid <= 1'b0;
+    if_id_page_fault <= 1'b0;
   end else if (pipeline_stall) begin
     // hold PC and IF/ID
-  end else if (imem_done_q || imem_rd_data_valid) begin
+  end else if (imem_done_q || instruction_mmu_resp_valid) begin
     if_id_valid <= 1'b1;
     if_id_pc <= imem_done_q ? imem_done_pc_q : imem_req_pc_q;
-    if_id_instruction <= imem_done_q ? imem_done_data_q : imem_data;
+    if_id_instruction <= imem_done_q ? imem_done_data_q : instruction_mmu_rd_data;
+    if_id_page_fault <= imem_done_q ? imem_done_page_fault_q : instruction_mmu_page_fault;
+    if_id_fault_addr <= imem_done_q ? imem_done_fault_addr_q : instruction_mmu_fault_addr;
   end else begin
     if_id_valid <= 1'b0;
+    if_id_page_fault <= 1'b0;
   end
 end
 
@@ -640,7 +662,11 @@ end
 always_comb begin
   id_trap = '0;
 
-  if (id_retire_action == RETIRE_TRAP) begin
+  if (if_id_page_fault) begin
+    id_trap.mepc = if_id_pc;
+    id_trap.mcause = {28'h0, TRAP_CAUSE_INST_PAGE_FAULT};
+    id_trap.mtval = if_id_fault_addr;
+  end else if (id_retire_action == RETIRE_TRAP) begin
     id_trap.mepc = if_id_pc;
     if (id_trap_cause == TRAP_CAUSE_ECALL_M) begin // all ecall is decoded as ecall_m
       unique case (current_privilege)
@@ -702,28 +728,29 @@ always_ff @(posedge clk or negedge reset_n) begin
     id_ex.alu_op           <= id_alu_op;
     id_ex.is_b_type        <= id_b_type;
     id_ex.funct3           <= id_funct3;
-    id_ex.pc_sel           <= id_pc_sel;
-    id_ex.dmem_req         <= id_dmem_req;
-    id_ex.dmem_wr_en       <= id_dmem_wr_en;
+    id_ex.pc_sel           <= if_id_page_fault ? 1'b0 : id_pc_sel;
+    id_ex.dmem_req         <= if_id_page_fault ? 1'b0 : id_dmem_req;
+    id_ex.dmem_wr_en       <= if_id_page_fault ? 1'b0 : id_dmem_wr_en;
     id_ex.dmem_size        <= id_dmem_size;
     id_ex.dmem_zero_extend <= id_dmem_zero_extend;
-    id_ex.rf_wr_en         <= id_rf_wr_en;
+    id_ex.rf_wr_en         <= if_id_page_fault ? 1'b0 : id_rf_wr_en;
     id_ex.rf_wr_data_sel   <= id_rf_wr_data_sel;
-    id_ex.csr_req          <= id_csr_req;
+    id_ex.csr_req          <= if_id_page_fault ? 1'b0 : id_csr_req;
     id_ex.csr_addr         <= id_csr_addr;
     id_ex.csr_op           <= id_csr_op;
     id_ex.csr_imm_sel      <= id_csr_imm_sel;
-    id_ex.fence_i          <= id_fence_i;
-    id_ex.sfence_vma       <= id_sfence_vma;
-    id_ex.mul_div_req      <= id_mul_div_req;
+    id_ex.fence_i          <= if_id_page_fault ? 1'b0 : id_fence_i;
+    id_ex.sfence_vma       <= if_id_page_fault ? 1'b0 : id_sfence_vma;
+    id_ex.mul_div_req      <= if_id_page_fault ? 1'b0 : id_mul_div_req;
     id_ex.mul_div_op       <= id_mul_div_op;
-    id_ex.atomic_req       <= id_atomic_req;
+    id_ex.atomic_req       <= if_id_page_fault ? 1'b0 : id_atomic_req;
     id_ex.atomic_op        <= id_atomic_op;
-    id_ex.retire_action    <= id_retire_action;
+    id_ex.retire_action    <= if_id_page_fault ? RETIRE_TRAP : id_retire_action;
     id_ex.trap             <= id_trap;
     id_ex.fwd_a_sel        <= id_fwd_a_sel;
     id_ex.fwd_b_sel        <= id_fwd_b_sel;
-    id_ex.load_from_memory <= (id_rf_wr_data_sel == WB_SRC_MEM);
+    id_ex.load_from_memory <= !if_id_page_fault &&
+                              (id_rf_wr_data_sel == WB_SRC_MEM);
   end
 end
 
@@ -923,9 +950,10 @@ always_ff @(posedge clk or negedge reset_n) begin
 end
 
 // --------------------------------------------------------
-// MEM stage data MMU
-//   The pipeline supplies a virtual operation. The MMU translates it,
-//   executes normal or atomic physical transactions, and returns one result.
+// Shared instruction/data MMU
+//   Virtual fetch and data operations share one page-table walker. Translated
+//   instruction requests use the physical imem channel; data, atomics, and PTW
+//   requests share the physical dmem channel.
 // --------------------------------------------------------
 assign data_mmu_req = ex_mem.valid &&
                       (ex_mem.retire_action == RETIRE_NORMAL) &&
@@ -933,9 +961,19 @@ assign data_mmu_req = ex_mem.valid &&
                       !dmem_inflight &&
                       !dmem_done_q;
 
-data_mmu u_data_mmu (
+mmu #(
+    .ITLB_ENTRY_COUNT(ITLB_ENTRY_COUNT),
+    .DTLB_ENTRY_COUNT(DTLB_ENTRY_COUNT)
+) u_mmu (
     .clk                 (clk),
     .reset_n             (reset_n),
+    .imem_req            (instruction_mmu_req),
+    .imem_ready          (instruction_mmu_ready),
+    .imem_virtual_addr   (imem_req_pc_q),
+    .imem_resp_valid     (instruction_mmu_resp_valid),
+    .imem_rd_data        (instruction_mmu_rd_data),
+    .imem_page_fault     (instruction_mmu_page_fault),
+    .imem_fault_addr     (instruction_mmu_fault_addr),
     .req                 (data_mmu_req),
     .ready               (data_mmu_ready),
     .wr_en               (ex_mem.dmem_wr_en),
@@ -952,10 +990,16 @@ data_mmu u_data_mmu (
     .mstatus_mxr         (csr_mstatus_mxr),
     .satp                (csr_satp),
     .clear_reservation   (trap_commit || interrupt_take),
+    .sfence_vma_flush    (sfence_vma_flush),
     .resp_valid          (data_mmu_resp_valid),
     .rd_data             (data_mmu_rd_data),
     .page_fault          (data_mmu_page_fault),
     .fault_addr          (data_mmu_fault_addr),
+    .physical_imem_req   (imem_req),
+    .physical_imem_ready (imem_ready),
+    .physical_imem_addr  (imem_addr),
+    .physical_imem_resp_valid(imem_rd_data_valid),
+    .physical_imem_rd_data(imem_data),
     .mem_req             (dmem_req),
     .mem_ready           (dmem_ready),
     .mem_wr_en           (dmem_wr_en),

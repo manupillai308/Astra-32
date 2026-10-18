@@ -1,7 +1,9 @@
 module fpga_top #(
   parameter HEARTBEAT_BIT = 23,
   parameter int CLK_HZ = 100_000_000,
-  parameter int UART_BAUD = 115_200
+  parameter int UART_BAUD = 115_200,
+  parameter int ITLB_ENTRY_COUNT = 16,
+  parameter int DTLB_ENTRY_COUNT = 16
 )(
   input  wire        clk_100mhz,
   input  wire        clk_12mhz,
@@ -232,7 +234,9 @@ top #(
   .LED_BASE_ADDR  (32'h1000_0000),
   .UART_BASE_ADDR (32'h1000_0010),
   .CLK_HZ (CLK_HZ),
-  .UART_BAUD(UART_BAUD)
+  .UART_BAUD(UART_BAUD),
+  .ITLB_ENTRY_COUNT(ITLB_ENTRY_COUNT),
+  .DTLB_ENTRY_COUNT(DTLB_ENTRY_COUNT)
 ) u_top (
   .clk      (clk_100mhz),
   .reset_n  (soc_reset_n),

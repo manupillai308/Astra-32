@@ -5,6 +5,10 @@ _start:
     lui     x22, 0x80002
     lui     x30, 0x10000
 
+    # Identity-map ROM as supervisor RX so S-mode can keep executing.
+    addi    x1, x0, 0x4b
+    sw      x1, 0(x20)
+
     # Supervisor RWAD mapping used while the timer becomes pending.
     lui     x1, 0x20000
     ori     x1, x1, 0x0c7
@@ -60,10 +64,11 @@ translation_loop:
 
 machine_handler:
     addi    x31, x0, 1
-    csrr    x3, mcause
-    lui     x4, 0x80000
-    addi    x4, x4, 7
-    bne     x3, x4, fail
+    # Preserve x3 because the interrupt may arrive between its load and use.
+    csrr    x24, mcause
+    lui     x25, 0x80000
+    addi    x25, x25, 7
+    bne     x24, x25, fail
 
     lui     x10, 0x02004
     addi    x15, x0, -1

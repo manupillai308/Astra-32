@@ -16,8 +16,8 @@ module data_translation (
   input  logic [31:0]      satp,
 
   output logic             resp_valid,
-  output logic [31:0]      physical_addr,
   output logic             page_fault,
+  output tlb_fill_t        fill,
 
   output logic             mem_req,
   input  logic             mem_ready,
@@ -45,16 +45,16 @@ privilege_mode_t effective_privilege_q;
 logic [21:0] root_ppn_q;
 logic sum_q;
 logic mxr_q;
-logic [31:0] physical_addr_q;
 logic page_fault_q;
+tlb_fill_t fill_q;
 
 privilege_mode_t effective_privilege;
 logic translation_enabled;
 logic walker_req;
 logic walker_ready;
 logic walker_resp_valid;
-logic [31:0] walker_physical_addr;
 logic walker_page_fault;
+tlb_fill_t walker_fill;
 
 always_comb begin
   effective_privilege = current_privilege;
@@ -67,8 +67,8 @@ assign translation_enabled = satp[31] &&
                              (effective_privilege != PRIVILEGE_M);
 assign ready = (state_q == TRANSLATION_IDLE);
 assign resp_valid = (state_q == TRANSLATION_RESP);
-assign physical_addr = physical_addr_q;
 assign page_fault = page_fault_q;
+assign fill = fill_q;
 assign walker_req = (state_q == TRANSLATION_WALK_REQ);
 
 sv32_page_table_walker u_page_table_walker (
@@ -83,8 +83,8 @@ sv32_page_table_walker u_page_table_walker (
     .sum             (sum_q),
     .mxr             (mxr_q),
     .resp_valid      (walker_resp_valid),
-    .physical_addr   (walker_physical_addr),
     .page_fault      (walker_page_fault),
+    .fill            (walker_fill),
     .mem_req         (mem_req),
     .mem_ready       (mem_ready),
     .mem_wr_en       (mem_wr_en),
@@ -106,8 +106,8 @@ always_ff @(posedge clk or negedge reset_n) begin
     root_ppn_q <= 22'h0;
     sum_q <= 1'b0;
     mxr_q <= 1'b0;
-    physical_addr_q <= 32'h0;
     page_fault_q <= 1'b0;
+    fill_q <= '0;
   end else begin
     unique case (state_q)
       TRANSLATION_IDLE: begin
@@ -118,8 +118,9 @@ always_ff @(posedge clk or negedge reset_n) begin
           root_ppn_q <= satp[21:0];
           sum_q <= mstatus_sum;
           mxr_q <= mstatus_mxr;
-          physical_addr_q <= virtual_addr;
           page_fault_q <= 1'b0;
+          fill_q <= '0;
+          fill_q.physical_addr <= virtual_addr;
           state_q <= translation_enabled ? TRANSLATION_WALK_REQ :
                                            TRANSLATION_RESP;
         end
@@ -131,8 +132,8 @@ always_ff @(posedge clk or negedge reset_n) begin
 
       TRANSLATION_WALK_WAIT: begin
         if (walker_resp_valid) begin
-          physical_addr_q <= walker_physical_addr;
           page_fault_q <= walker_page_fault;
+          fill_q <= walker_fill;
           state_q <= TRANSLATION_RESP;
         end
       end

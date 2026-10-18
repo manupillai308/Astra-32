@@ -4,6 +4,10 @@ _start:
     lui     x20, 0x80000
     lui     x30, 0x10000
 
+    # Identity-map ROM as supervisor RX so S-mode can reach the faulting load.
+    addi    x1, x0, 0x4b
+    sw      x1, 0(x20)
+
     # Explicitly invalidate the root entry for VA 0x4000_0000.
     sw      x0, 0x400(x20)
 

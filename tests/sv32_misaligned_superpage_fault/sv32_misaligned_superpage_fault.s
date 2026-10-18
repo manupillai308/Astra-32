@@ -4,6 +4,10 @@ _start:
     lui     x20, 0x80000
     lui     x30, 0x10000
 
+    # Identity-map ROM as supervisor RX so S-mode can reach the faulting load.
+    addi    x1, x0, 0x4b
+    sw      x1, 0(x20)
+
     # A level-1 leaf must have PPN[0]=0. Pointing at 0x8000_1000
     # deliberately violates the 4 MiB superpage alignment requirement.
     lui     x1, 0x80001
