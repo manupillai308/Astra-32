@@ -89,6 +89,7 @@ supervisor_entry:
     sw      x1, 0(x11)
 
     # The cached translation must continue executing the first function.
+    addi    x10, x0, 0
     jalr    x5, 0(x14)
     addi    x6, x0, 1
     bne     x10, x6, fail_2
