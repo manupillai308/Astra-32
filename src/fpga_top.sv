@@ -3,7 +3,10 @@ module fpga_top #(
   parameter int CLK_HZ = 100_000_000,
   parameter int UART_BAUD = 115_200,
   parameter int ITLB_ENTRY_COUNT = 16,
-  parameter int DTLB_ENTRY_COUNT = 16
+  parameter int DTLB_ENTRY_COUNT = 16,
+  parameter logic [31:0] PLIC_BASE_ADDR = 32'h0c00_0000,
+  parameter int PLIC_SOURCE_COUNT = 8,
+  parameter int PLIC_PRIORITY_WIDTH = 3
 )(
   input  wire        clk_100mhz,
   input  wire        clk_12mhz,
@@ -233,6 +236,9 @@ top #(
   .LED_WIDTH      (3),
   .LED_BASE_ADDR  (32'h1000_0000),
   .UART_BASE_ADDR (32'h1000_0010),
+  .PLIC_BASE_ADDR (PLIC_BASE_ADDR),
+  .PLIC_SOURCE_COUNT(PLIC_SOURCE_COUNT),
+  .PLIC_PRIORITY_WIDTH(PLIC_PRIORITY_WIDTH),
   .CLK_HZ (CLK_HZ),
   .UART_BAUD(UART_BAUD),
   .ITLB_ENTRY_COUNT(ITLB_ENTRY_COUNT),

@@ -7,6 +7,9 @@ module bus_data_memory #(
   parameter LED_WIDTH = 3,
   parameter ROM_BASE_ADDR = 32'h0,
   parameter CLINT_BASE_ADDR = 32'h0200_0000,
+  parameter PLIC_BASE_ADDR = 32'h0c00_0000,
+  parameter int PLIC_SOURCE_COUNT = 8,
+  parameter int PLIC_PRIORITY_WIDTH = 3,
   parameter LED_BASE_ADDR = 32'h1000_0000,
   parameter UART_BASE_ADDR = 32'h1000_0010,
   parameter int CLK_HZ = 12_000_000,
@@ -36,6 +39,8 @@ module bus_data_memory #(
   output logic                 clint_msip,
   output logic                 clint_mtip,
   output logic [63:0]          clint_mtime,
+  output logic                 plic_meip,
+  output logic                 plic_seip,
 
   input  logic                 uart_rx,
   output logic                 uart_tx
@@ -46,15 +51,18 @@ logic dmem_rom_sel;
 logic dmem_led_sel;
 logic dmem_uart_sel;
 logic dmem_clint_sel;
+logic dmem_plic_sel;
 logic ram_req;
 logic led_req;
 logic uart_req;
 logic clint_req;
+logic plic_req;
 logic rom_req;
 logic dmem_mmio_accept;
 logic ram_busy;
 logic uart_busy;
 logic clint_busy;
+logic plic_busy;
 logic mmio_busy;
 logic dmem_accept;
 
@@ -62,6 +70,7 @@ logic [31:0] ram_rd_data;
 logic [31:0] led_rd_data;
 logic [31:0] uart_rd_data;
 logic [31:0] clint_rd_data;
+logic [31:0] plic_rd_data;
 logic [31:0] rom_rd_data;
 logic [31:0] ram_offset_addr;
 logic [31:0] imem_ram_offset_addr;
@@ -80,7 +89,8 @@ typedef enum logic [2:0] {
   DMEM_TARGET_ROM  = 3'b010,
   DMEM_TARGET_LED  = 3'b011,
   DMEM_TARGET_UART = 3'b100,
-  DMEM_TARGET_CLINT = 3'b101
+  DMEM_TARGET_CLINT = 3'b101,
+  DMEM_TARGET_PLIC = 3'b110
 } dmem_target_t;
 
 typedef enum logic [1:0] {
@@ -168,6 +178,8 @@ assign dmem_led_sel = (cpu_dmem_addr == LED_BASE_ADDR);
 assign dmem_uart_sel = (cpu_dmem_addr[31:4] == UART_BASE_ADDR[31:4]);
 assign dmem_clint_sel = (cpu_dmem_addr >= CLINT_BASE_ADDR) &&
                         (cpu_dmem_addr < (CLINT_BASE_ADDR + 32'h0001_0000));
+assign dmem_plic_sel = (cpu_dmem_addr >= PLIC_BASE_ADDR) &&
+                       (cpu_dmem_addr < (PLIC_BASE_ADDR + 32'h0040_0000));
 always_comb begin
   unique case (dmem_target)
     DMEM_TARGET_RAM:  cpu_dmem_ready = (ram_state_q == RAM_IDLE) &&
@@ -177,6 +189,7 @@ always_comb begin
     DMEM_TARGET_LED,
     DMEM_TARGET_UART,
     DMEM_TARGET_CLINT,
+    DMEM_TARGET_PLIC,
     DMEM_TARGET_NONE: cpu_dmem_ready = (mmio_state_q == MMIO_IDLE);
     default:         cpu_dmem_ready = 1'b0;
   endcase
@@ -201,6 +214,7 @@ always_comb begin
     dmem_led_sel: dmem_target = DMEM_TARGET_LED;
     dmem_uart_sel: dmem_target = DMEM_TARGET_UART;
     dmem_clint_sel: dmem_target = DMEM_TARGET_CLINT;
+    dmem_plic_sel: dmem_target = DMEM_TARGET_PLIC;
     default: dmem_target = DMEM_TARGET_NONE;
   endcase
 end
@@ -254,6 +268,7 @@ always_comb begin
   led_req = (mmio_state_q == MMIO_ISSUE) && (mmio_target_q == DMEM_TARGET_LED);
   uart_req = (mmio_state_q == MMIO_ISSUE) && (mmio_target_q == DMEM_TARGET_UART);
   clint_req = (mmio_state_q == MMIO_ISSUE) && (mmio_target_q == DMEM_TARGET_CLINT);
+  plic_req = (mmio_state_q == MMIO_ISSUE) && (mmio_target_q == DMEM_TARGET_PLIC);
   rom_req = (rom_state_q == ROM_ISSUE) && !rom_wr_en_q;
 end
 
@@ -261,6 +276,7 @@ always_comb begin
   unique case (mmio_target_q)
     DMEM_TARGET_UART:  mmio_busy = uart_busy;
     DMEM_TARGET_CLINT: mmio_busy = clint_busy;
+    DMEM_TARGET_PLIC:  mmio_busy = plic_busy;
     default:           mmio_busy = 1'b0;
   endcase
 end
@@ -403,6 +419,7 @@ always_comb begin
       DMEM_TARGET_LED:  cpu_dmem_rd_data = led_rd_data;
       DMEM_TARGET_UART: cpu_dmem_rd_data = uart_rd_data;
       DMEM_TARGET_CLINT: cpu_dmem_rd_data = clint_rd_data;
+      DMEM_TARGET_PLIC: cpu_dmem_rd_data = plic_rd_data;
       default:          cpu_dmem_rd_data = 32'h0;
     endcase
   end
@@ -466,6 +483,24 @@ clint #(
   .msip    (clint_msip),
   .mtip    (clint_mtip),
   .mtime   (clint_mtime)
+);
+
+plic #(
+  .BASE_ADDR     (PLIC_BASE_ADDR),
+  .SOURCE_COUNT  (PLIC_SOURCE_COUNT),
+  .PRIORITY_WIDTH(PLIC_PRIORITY_WIDTH)
+) u_plic (
+  .clk       (clk),
+  .reset_n   (reset_n),
+  .req       (plic_req),
+  .wr_en     (mmio_wr_en_q),
+  .addr      (mmio_addr_q),
+  .wr_data   (mmio_wr_data_q),
+  .rd_data   (plic_rd_data),
+  .busy      (plic_busy),
+  .source_irq({PLIC_SOURCE_COUNT{1'b0}}),
+  .meip      (plic_meip),
+  .seip      (plic_seip)
 );
 
 rom_memory #(

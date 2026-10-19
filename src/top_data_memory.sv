@@ -6,6 +6,9 @@ module top_data_memory #(
   parameter RAM_ADDR_WIDTH = 10,
   parameter LED_WIDTH = 3,
   parameter CLINT_BASE_ADDR = 32'h0200_0000,
+  parameter PLIC_BASE_ADDR = 32'h0c00_0000,
+  parameter int PLIC_SOURCE_COUNT = 8,
+  parameter int PLIC_PRIORITY_WIDTH = 3,
   parameter LED_BASE_ADDR = 32'h1000_0000,
   parameter UART_BASE_ADDR = 32'h1000_0010,
   parameter int CLK_HZ = 12_000_000,
@@ -39,12 +42,16 @@ logic        cpu_dmem_rd_data_valid;
 logic        clint_msip;
 logic        clint_mtip;
 logic [63:0] clint_mtime;
+logic        plic_meip;
+logic        plic_seip;
 logic [31:0] irq_pending;
 
 always_comb begin
   irq_pending = 32'h0;
   irq_pending[IRQ_CAUSE_MSI] = clint_msip;
   irq_pending[IRQ_CAUSE_MTI] = clint_mtip;
+  irq_pending[IRQ_CAUSE_MEI] = plic_meip;
+  irq_pending[IRQ_CAUSE_SEI] = plic_seip;
 end
 
 cpu #(
@@ -77,6 +84,9 @@ bus_data_memory #(
   .RAM_ADDR_WIDTH    (RAM_ADDR_WIDTH),
   .LED_WIDTH         (LED_WIDTH),
   .CLINT_BASE_ADDR   (CLINT_BASE_ADDR),
+  .PLIC_BASE_ADDR    (PLIC_BASE_ADDR),
+  .PLIC_SOURCE_COUNT (PLIC_SOURCE_COUNT),
+  .PLIC_PRIORITY_WIDTH(PLIC_PRIORITY_WIDTH),
   .LED_BASE_ADDR     (LED_BASE_ADDR),
   .UART_BASE_ADDR    (UART_BASE_ADDR),
   .CLK_HZ            (CLK_HZ),
@@ -103,6 +113,8 @@ bus_data_memory #(
   .clint_msip           (clint_msip),
   .clint_mtip           (clint_mtip),
   .clint_mtime          (clint_mtime),
+  .plic_meip            (plic_meip),
+  .plic_seip            (plic_seip),
   .uart_rx              (uart_rx),
   .uart_tx              (uart_tx)
 );
