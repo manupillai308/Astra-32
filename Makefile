@@ -62,7 +62,12 @@ run: build
 	fi
 	@$(MAKE) -s tests/$(TEST)/$(TEST).mem
 	@rm -f tests/$(TEST)/sim.log
-	@$(VSIM) +PROGRAM=tests/$(TEST)/$(TEST).mem $(SIM_TOP)
+	@uart_arg=""; \
+	case "$(TEST)" in \
+	  mmio_uart_rx_poll) uart_arg="+UART_RX_BYTE=41" ;; \
+	  mmio_uart_rx_interrupt) uart_arg="+UART_RX_BYTE=5a" ;; \
+	esac; \
+	$(VSIM) +PROGRAM=tests/$(TEST)/$(TEST).mem $$uart_arg $(SIM_TOP)
 
 # ---- Full regression ---------------------------------------------
 # Runs every LED self-checking test and prints pass/fail summary.
@@ -72,7 +77,12 @@ test: build asm
 	@pass=0; fail=0; failed=""; \
 	for t in $(TESTS); do \
 	  rm -f tests/$$t/sim.log; \
-	  $(VSIM) +PROGRAM=tests/$$t/$$t.mem $(SIM_TOP) > tests/$$t/sim.log 2>&1; \
+	  uart_arg=""; \
+	  case "$$t" in \
+	    mmio_uart_rx_poll) uart_arg="+UART_RX_BYTE=41" ;; \
+	    mmio_uart_rx_interrupt) uart_arg="+UART_RX_BYTE=5a" ;; \
+	  esac; \
+	  $(VSIM) +PROGRAM=tests/$$t/$$t.mem $$uart_arg $(SIM_TOP) > tests/$$t/sim.log 2>&1; \
 	  sim_status=$$?; \
 	  ok=1; \
 	  if [ $$sim_status -ne 0 ]; then \

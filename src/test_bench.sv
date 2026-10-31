@@ -28,6 +28,9 @@ module test_bench();
   logic [LED_WIDTH-1:0] mmio_led;
   logic [7:0] uart_tx_bytes [0:UART_MAX_CAPTURED_BYTES-1];
   integer uart_tx_count = 0;
+  integer uart_rx_stimulus;
+  integer uart_rx_stimulus_valid;
+  integer uart_rx_stimulus_file;
 
   wire [15:0] ddr3_dq;
   wire [1:0]  ddr3_dqs_n;
@@ -58,6 +61,23 @@ module test_bench();
   integer          uart_sample_count;
   logic [2:0]      uart_bit_index;
   logic [7:0]      uart_tx_byte;
+
+  task automatic send_uart_rx_byte(input logic [7:0] data);
+    integer bit_index;
+    begin
+      @(negedge soc_clk);
+      uart_rx = 1'b0;
+      repeat (UART_CLKS_PER_BIT) @(negedge soc_clk);
+
+      for (bit_index = 0; bit_index < 8; bit_index = bit_index + 1) begin
+        uart_rx = data[bit_index];
+        repeat (UART_CLKS_PER_BIT) @(negedge soc_clk);
+      end
+
+      uart_rx = 1'b1;
+      repeat (UART_CLKS_PER_BIT) @(negedge soc_clk);
+    end
+  endtask
 
   assign mmio_led = led[3:1];
 
@@ -198,6 +218,20 @@ module test_bench();
     reset_n = 0;
     uart_rx = 1;
     #200000 reset_n = 1;
+
+    uart_rx_stimulus_valid = $value$plusargs("UART_RX_BYTE=%h", uart_rx_stimulus);
+    if (!uart_rx_stimulus_valid) begin
+      uart_rx_stimulus_file = $fopen("uart_rx_stimulus.hex", "r");
+      if (uart_rx_stimulus_file != 0) begin
+        uart_rx_stimulus_valid = $fscanf(uart_rx_stimulus_file, "%h", uart_rx_stimulus);
+        $fclose(uart_rx_stimulus_file);
+      end
+    end
+    if (uart_rx_stimulus_valid) begin
+      @(posedge soc_reset_n);
+      repeat (32) @(posedge soc_clk);
+      send_uart_rx_byte(uart_rx_stimulus[7:0]);
+    end
   end
 
 endmodule

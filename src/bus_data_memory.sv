@@ -61,6 +61,7 @@ logic rom_req;
 logic dmem_mmio_accept;
 logic ram_busy;
 logic uart_busy;
+logic uart_irq;
 logic clint_busy;
 logic plic_busy;
 logic mmio_busy;
@@ -158,9 +159,15 @@ logic [31:0] rom_addr_q;
 logic        rom_zero_extend_q;
 logic        rom_rr_q;
 logic        ram_rr_q;
+logic [PLIC_SOURCE_COUNT-1:0] plic_sources;
 
 localparam logic [31:0] RAM_SIZE_BYTES = 32'h1 << RAM_ADDR_WIDTH;
 localparam logic [31:0] ROM_SIZE_BYTES = 32'h1 << ROM_ADDR_WIDTH;
+
+always_comb begin
+  plic_sources = '0;
+  plic_sources[0] = uart_irq;
+end
 
 assign ram_offset_addr = cpu_dmem_addr - RAM_BASE_ADDR;
 assign imem_ram_offset_addr = cpu_imem_addr - RAM_BASE_ADDR;
@@ -465,6 +472,7 @@ mmio_uart #(
   .wr_data(mmio_wr_data_q),
   .rd_data(uart_rd_data),
   .busy(uart_busy),
+  .irq(uart_irq),
   .uart_rx(uart_rx),
   .uart_tx(uart_tx)
 );
@@ -498,7 +506,7 @@ plic #(
   .wr_data   (mmio_wr_data_q),
   .rd_data   (plic_rd_data),
   .busy      (plic_busy),
-  .source_irq({PLIC_SOURCE_COUNT{1'b0}}),
+  .source_irq(plic_sources),
   .meip      (plic_meip),
   .seip      (plic_seip)
 );
