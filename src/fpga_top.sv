@@ -75,7 +75,7 @@ wire        ui_clk_sync_rst;
 wire        init_calib_complete;
 logic [1:0] soc_reset_sync;
 logic       soc_reset_n;
-logic [1:0] calib_complete_sync;
+logic [1:0] mig_ready_sync;
 logic       ui_reset_n;
 
 
@@ -113,12 +113,15 @@ assign ui_reset_n = !ui_clk_sync_rst && init_calib_complete;
 
 always_ff @(posedge clk_100mhz or negedge reset_n) begin
   if (!reset_n) begin
-    calib_complete_sync <= 2'b00;
+    mig_ready_sync <= 2'b00;
+    soc_reset_sync <= 2'b00;
+  end else if (!mig_sys_rst_n) begin
+    mig_ready_sync <= 2'b00;
     soc_reset_sync <= 2'b00;
   end else begin
-    calib_complete_sync <= {calib_complete_sync[0], init_calib_complete};
+    mig_ready_sync <= {mig_ready_sync[0], ui_reset_n};
 
-    if (!calib_complete_sync[1]) begin
+    if (!mig_ready_sync[1]) begin
       soc_reset_sync <= 2'b00;
     end else begin
       soc_reset_sync <= {soc_reset_sync[0], 1'b1};

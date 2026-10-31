@@ -11,6 +11,7 @@ module test_bench_data_memory();
   localparam int LED_WIDTH = 3;
   localparam logic [LED_WIDTH-1:0] TEST_PASS_LED = 3'h1;
   localparam logic [LED_WIDTH-1:0] TEST_FAIL_LED = 3'h2;
+  localparam logic [LED_WIDTH-1:0] TEST_UART_READY_LED = 3'h4;
   // Sv32 tests need separate 4 KiB root and level-0 page tables.
   localparam int RAM_ADDR_WIDTH = 14;
   localparam int CLK_HZ = 100_000_000;
@@ -164,8 +165,12 @@ module test_bench_data_memory();
       end
     end
     if (uart_rx_stimulus_valid) begin
-      repeat (32) @(posedge clk);
+      wait (reset_n && (mmio_led == TEST_UART_READY_LED));
+      $display("[INFO] UART RX sending 0x%02h at cycle %0d, time %0t",
+               uart_rx_stimulus[7:0], cycle_count, $time);
       send_uart_rx_byte(uart_rx_stimulus[7:0]);
+      $display("[INFO] UART RX sent 0x%02h at cycle %0d, time %0t",
+               uart_rx_stimulus[7:0], cycle_count, $time);
     end
   end
 

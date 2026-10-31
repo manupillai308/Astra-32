@@ -9,10 +9,12 @@ module test_bench();
   //     2 = fail
   //   MAX_CYCLES counts CPU clock cycles.
   // ----------------------------------------------------------------
-  parameter int MAX_CYCLES = 1_000_000;
+  // parameter int MAX_CYCLES = 1_000_000;
+  parameter int MAX_CYCLES = 50_000;
   localparam int LED_WIDTH = 3;
   localparam logic [LED_WIDTH-1:0] TEST_PASS_LED = 3'h1;
   localparam logic [LED_WIDTH-1:0] TEST_FAIL_LED = 3'h2;
+  localparam logic [LED_WIDTH-1:0] TEST_UART_READY_LED = 3'h4;
   localparam int CLK_HZ = 100_000_000;
   localparam int UART_BAUD = 115_200;
   localparam int UART_CLKS_PER_BIT = CLK_HZ / UART_BAUD;
@@ -228,9 +230,12 @@ module test_bench();
       end
     end
     if (uart_rx_stimulus_valid) begin
-      @(posedge soc_reset_n);
-      repeat (32) @(posedge soc_clk);
+      wait (soc_reset_n && (mmio_led == TEST_UART_READY_LED));
+      $display("[INFO] UART RX sending 0x%02h at cycle %0d, time %0t",
+               uart_rx_stimulus[7:0], cycle_count, $time);
       send_uart_rx_byte(uart_rx_stimulus[7:0]);
+      $display("[INFO] UART RX sent 0x%02h at cycle %0d, time %0t",
+               uart_rx_stimulus[7:0], cycle_count, $time);
     end
   end
 

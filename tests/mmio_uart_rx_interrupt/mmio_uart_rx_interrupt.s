@@ -27,7 +27,14 @@ _start:
     addi    x1, x0, 8
     csrs    mstatus, x1
 
+    # All interrupt routing is configured; request the UART frame now.
+    addi    x1, x0, 4
+    sw      x1, 0(x30)
+
 wait_for_interrupt:
+    lw      x8, 0x18(x30)
+    andi    x9, x8, 0x1c
+    bne     x9, x0, uart_status_fail
     jal     x0, wait_for_interrupt
 
 trap_handler:
@@ -40,6 +47,13 @@ trap_handler:
     lw      x4, 4(x12)
     addi    x5, x0, 1
     bne     x4, x5, fail
+
+    # Verify the interrupt corresponds to available, error-free RX data.
+    lw      x8, 0x18(x30)
+    andi    x9, x8, 0x1c
+    bne     x9, x0, uart_status_fail
+    andi    x9, x8, 2
+    beq     x9, x0, fail
 
     # Draining RXDATA deasserts the UART's level interrupt.
     lw      x6, 0x14(x30)
@@ -59,3 +73,7 @@ fail:
     addi    x1, x0, 2
     sw      x1, 0(x30)
     jal     x0, hang
+
+uart_status_fail:
+    addi    x31, x0, 1
+    jal     x0, fail

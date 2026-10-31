@@ -3,8 +3,14 @@
 _start:
     lui     x30, 0x10000
 
+    # Tell the testbench that software is ready for the UART frame.
+    addi    x1, x0, 4
+    sw      x1, 0(x30)
+
 wait_for_byte:
     lw      x1, 0x18(x30)
+    andi    x2, x1, 0x1c
+    bne     x2, x0, uart_status_fail
     andi    x1, x1, 2
     beq     x1, x0, wait_for_byte
 
@@ -27,3 +33,7 @@ fail:
     addi    x1, x0, 2
     sw      x1, 0(x30)
     jal     x0, hang
+
+uart_status_fail:
+    addi    x31, x0, 1
+    jal     x0, fail
