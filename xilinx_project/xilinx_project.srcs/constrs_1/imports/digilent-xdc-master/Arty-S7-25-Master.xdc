@@ -297,3 +297,8 @@ set_property CONFIG_MODE SPIx4 [current_design]
 ## used the internal reference is set to half that value (i.e. 0.675v). Note that
 ## this property must be set even if SW3 is not used in the design.
 set_property INTERNAL_VREF 0.675 [get_iobanks 34]
+
+## MIG UI-domain readiness is synchronized into clk_100mhz by mig_ready_sync.
+## Ignore setup only at the first synchronizer stage; the second stage remains timed.
+set mig_ready_sync_ff0 [get_cells -hier -regexp {^.*mig_ready_sync_reg\[0\]$}]
+set_false_path -to [get_pins -of_objects $mig_ready_sync_ff0 -filter {REF_PIN_NAME == D}]

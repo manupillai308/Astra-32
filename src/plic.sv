@@ -97,11 +97,10 @@ always_comb begin
   end
 end
 
-assign meip = (machine_claim_id != '0);
-assign seip = (supervisor_claim_id != '0);
-
 always_ff @(posedge clk or negedge reset_n) begin
   if (!reset_n) begin
+    meip <= 1'b0;
+    seip <= 1'b0;
     rd_data <= 32'h0;
     pending_q <= '0;
     claimed_q <= '0;
@@ -116,6 +115,9 @@ always_ff @(posedge clk or negedge reset_n) begin
       priority_q[sequential_index] <= '0;
     end
   end else begin
+    meip <= (machine_claim_id != '0);
+    seip <= (supervisor_claim_id != '0);
+
     // A gateway holds one request until software claims and completes it.
     for (sequential_index = 1; sequential_index <= SOURCE_COUNT;
          sequential_index = sequential_index + 1) begin

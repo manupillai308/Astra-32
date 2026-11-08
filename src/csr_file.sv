@@ -167,6 +167,8 @@ logic [31:0] enabled_pending;
 logic [31:0] machine_enabled_pending;
 logic [31:0] supervisor_enabled_pending;
 logic [31:0] eligible_pending;
+logic        irq_valid_next;
+interrupt_cause_t irq_cause_next;
 // Software-injected supervisor pending bits stored behind mip.
 logic [31:0] mip_supervisor_sw_q;
 logic        csr_implemented;
@@ -224,7 +226,7 @@ always_comb begin
   endcase
 end
 
-assign irq_valid = (eligible_pending != 32'h0);
+assign irq_valid_next = (eligible_pending != 32'h0);
 
 always_comb begin
   counter_access = 1'b1;
@@ -290,20 +292,20 @@ always_comb begin
 end
 
 always_comb begin
-  irq_cause = IRQ_CAUSE_MSI;
+  irq_cause_next = IRQ_CAUSE_MSI;
 
   if (eligible_pending[IRQ_CAUSE_MEI]) begin
-    irq_cause = IRQ_CAUSE_MEI;
+    irq_cause_next = IRQ_CAUSE_MEI;
   end else if (eligible_pending[IRQ_CAUSE_MSI]) begin
-    irq_cause = IRQ_CAUSE_MSI;
+    irq_cause_next = IRQ_CAUSE_MSI;
   end else if (eligible_pending[IRQ_CAUSE_MTI]) begin
-    irq_cause = IRQ_CAUSE_MTI;
+    irq_cause_next = IRQ_CAUSE_MTI;
   end else if (eligible_pending[IRQ_CAUSE_SEI]) begin
-    irq_cause = IRQ_CAUSE_SEI;
+    irq_cause_next = IRQ_CAUSE_SEI;
   end else if (eligible_pending[IRQ_CAUSE_SSI]) begin
-    irq_cause = IRQ_CAUSE_SSI;
+    irq_cause_next = IRQ_CAUSE_SSI;
   end else if (eligible_pending[IRQ_CAUSE_STI]) begin
-    irq_cause = IRQ_CAUSE_STI;
+    irq_cause_next = IRQ_CAUSE_STI;
   end
 end
 
@@ -395,7 +397,11 @@ always_ff @(posedge clk or negedge reset_n) begin
     satp_q <= 32'h0;
     mip_supervisor_sw_q <= 32'h0;
     current_privilege_q <= PRIVILEGE_M;
+    irq_valid <= 1'b0;
+    irq_cause <= IRQ_CAUSE_MSI;
   end else begin
+    irq_valid <= irq_valid_next;
+    irq_cause <= irq_cause_next;
     mcycle_q <= mcycle_q + 1'b1;
 
     if (instret_inc) begin
@@ -403,6 +409,9 @@ always_ff @(posedge clk or negedge reset_n) begin
     end
 
     if (trap_enter) begin
+      // Eligibility above was computed from the pre-trap status. Suppress that
+      // stale registered decision while trap entry disables MIE or SIE.
+      irq_valid <= 1'b0;
       if (trap_to_supervisor) begin
         sepc_q <= trap.mepc;
         scause_q <= trap.mcause;

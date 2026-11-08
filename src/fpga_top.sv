@@ -75,6 +75,7 @@ wire        ui_clk_sync_rst;
 wire        init_calib_complete;
 logic [1:0] soc_reset_sync;
 logic       soc_reset_n;
+(* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *)
 logic [1:0] mig_ready_sync;
 logic       ui_reset_n;
 

@@ -87,6 +87,7 @@ logic        retire_barrier_resume_redirect;
 typedef enum logic [1:0] {
   RETIRE_BARRIER_IDLE,
   RETIRE_BARRIER_DRAIN,
+  RETIRE_BARRIER_IRQ_SYNC,
   RETIRE_BARRIER_RECHECK
 } retire_barrier_state_t;
 
@@ -411,11 +412,22 @@ always_ff @(posedge clk or negedge reset_n) begin
 
       RETIRE_BARRIER_DRAIN: begin
         if (retire_barrier_commit) begin
-          retire_barrier_state_q <= RETIRE_BARRIER_RECHECK;
+          if ((retire_barrier_action_q == RETIRE_BARRIER_TRAP_RETURN) ||
+              (retire_barrier_action_q == RETIRE_BARRIER_INTERRUPT_RECHECK)) begin
+            retire_barrier_state_q <= RETIRE_BARRIER_IRQ_SYNC;
+          end else begin
+            retire_barrier_state_q <= RETIRE_BARRIER_RECHECK;
+          end
           if (retire_barrier_action_q == RETIRE_BARRIER_TRAP_RETURN) begin
             retire_barrier_resume_pc_q <= retire_barrier_sret_q ? csr_sepc : csr_mepc;
           end
         end
+      end
+
+      // CSR writes and trap returns update interrupt eligibility at commit.
+      // Allow the registered CSR interrupt decision to observe that new state.
+      RETIRE_BARRIER_IRQ_SYNC: begin
+        retire_barrier_state_q <= RETIRE_BARRIER_RECHECK;
       end
 
       RETIRE_BARRIER_RECHECK: begin

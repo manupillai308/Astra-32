@@ -167,35 +167,7 @@ always_comb begin
   atomic_ready = 1'b0;
   ptw_ready = 1'b0;
 
-  if (state_q == ARB_IDLE) begin
-    mem_req = selected_valid;
-    unique case (selected_owner)
-      OWNER_NORMAL: begin
-        mem_wr_en = normal_wr_en;
-        mem_size = normal_size;
-        mem_addr = normal_addr;
-        mem_wr_data = normal_wr_data;
-        mem_zero_extend = normal_zero_extend;
-        normal_ready = selected_valid && mem_ready;
-      end
-      OWNER_ATOMIC: begin
-        mem_wr_en = atomic_wr_en;
-        mem_size = atomic_size;
-        mem_addr = atomic_addr;
-        mem_wr_data = atomic_wr_data;
-        mem_zero_extend = atomic_zero_extend;
-        atomic_ready = selected_valid && mem_ready;
-      end
-      default: begin
-        mem_wr_en = ptw_wr_en;
-        mem_size = ptw_size;
-        mem_addr = ptw_addr;
-        mem_wr_data = ptw_wr_data;
-        mem_zero_extend = ptw_zero_extend;
-        ptw_ready = selected_valid && mem_ready;
-      end
-    endcase
-  end else if (state_q == ARB_ISSUE) begin
+  if (state_q == ARB_ISSUE) begin
     unique case (owner_q)
       OWNER_NORMAL: begin
         mem_req = normal_req;
@@ -284,12 +256,7 @@ always_ff @(posedge clk or negedge reset_n) begin
             lock_owner_q <= selected_owner;
           end
 
-          if (mem_fire) begin
-            next_priority_q <= next_owner(selected_owner);
-            state_q <= ARB_WAIT;
-          end else begin
-            state_q <= ARB_ISSUE;
-          end
+          state_q <= ARB_ISSUE;
         end
       end
       ARB_ISSUE: begin
